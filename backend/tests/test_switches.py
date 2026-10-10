@@ -174,3 +174,62 @@ async def test_route_uses_only_selected_network(auth_client, tmp_path, monkeypat
     assert response.status_code == 200
     assert [s["id"] for s in response.json()] == ["second"]
     assert "community" not in response.text
+
+
+async def test_known_unmanaged_wiring_is_not_polled_or_given_fake_telemetry(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "switches.json"
+    known = dict(
+        id="desk",
+        name="Desk switch",
+        port=101,
+        eero_ids=["eero-office"],
+        devices=[dict(mac="02:00:00:00:00:01", ip="192.168.1.165", name="Camera")],
+    )
+    path.write_text(json.dumps([config() | {"unmanaged_switches": [known]}]))
+    poll = AsyncMock(
+        return_value=SwitchSnapshot(
+            id="office", name="Office", host="192.168.1.10", status="unreachable"
+        )
+    )
+    monkeypatch.setattr(switches, "poll_switch", poll)
+    inventory = SwitchInventory()
+    snapshots = await inventory.read(str(path), "network-123")
+    assert poll.await_count == 1
+    unmanaged = snapshots[1]
+    assert unmanaged.kind == "unmanaged"
+    assert unmanaged.status == "unknown"
+    assert unmanaged.host == "" and unmanaged.ports == []
+    assert unmanaged.observed_at is None and unmanaged.mac is None
+    assert unmanaged.upstream_port_id == 101
+    assert unmanaged.eero_ids == ["eero-office"]
+    assert str(unmanaged.known_devices[0].ip) == "192.168.1.165"
+    assert "test-secret" not in unmanaged.model_dump_json()
+    path.write_text(
+        json.dumps([config() | {"unmanaged_switches": [known | {"name": "Renamed"}]}])
+    )
+    assert (await inventory.read(str(path), "network-123"))[1].name == "Renamed"
+    assert poll.await_count == 2
+
+
+async def test_rejects_conflicting_known_wiring(tmp_path, monkeypatch):
+    path = tmp_path / "switches.json"
+    known = dict(id="desk", name="Desk", port=1, eero_ids=["same-eero"])
+    path.write_text(
+        json.dumps(
+            [
+                config()
+                | {"unmanaged_switches": [known, known | {"id": "other", "port": 2}]}
+            ]
+        )
+    )
+    poll = AsyncMock()
+    monkeypatch.setattr(switches, "poll_switch", poll)
+    with pytest.raises(ValueError, match="only one switch"):
+        await SwitchInventory().read(str(path), "network-123")
+    poll.assert_not_awaited()
+    with pytest.raises(ValidationError):
+        SwitchConfig(
+            **(config() | {"unmanaged_switches": [known, known | {"id": "other"}]})
+        )

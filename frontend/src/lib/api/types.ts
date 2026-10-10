@@ -458,12 +458,17 @@ export interface SwitchSnapshot {
 	id: string;
 	name: string;
 	host: string;
-	status: 'online' | 'unreachable';
+	status: 'online' | 'unreachable' | 'unknown';
+	kind?: 'managed' | 'unmanaged';
 	model: string | null;
 	mac: string | null;
 	observed_at: string | null;
 	ports: SwitchPort[];
 	warnings: string[];
+	upstream_switch_id?: string | null;
+	upstream_port_id?: number | null;
+	eero_ids?: string[];
+	known_devices?: { mac: string; ip: string; name: string }[];
 }
 
 export interface EthernetPort {

@@ -74,6 +74,24 @@ Select a switch to see its port status, negotiated speeds, learned MAC counts an
 
 Ambiguous observations keep the existing eero association. MAC manufacturers alone cannot reveal cabling, and unmanaged switches cannot reliably be discovered from MAC learning. This integration does not provide VLAN diagrams or SNMP v3 authentication.
 
+To include a known unmanaged switch, add `unmanaged_switches` to its managed upstream switch's private configuration:
+
+```json
+"unmanaged_switches": [{
+  "id": "office",
+  "name": "Office switch",
+  "port": 2,
+  "eero_ids": ["YOUR_OFFICE_EERO_ID"],
+  "devices": [{
+    "mac": "02:00:00:00:00:01",
+    "ip": "192.168.1.165",
+    "name": "Office device"
+  }]
+}]
+```
+
+`port` is the upstream interface ID from `/api/switches`, not an assumed socket number. Wiring is labelled **User supplied**. The unmanaged switch has no invented management address, port inventory, speed or online status. Known clients missing from eero's inventory appear in topology using their configured MAC and IP; activity comes from MAC learning on the upstream port, and clients with no current observation are available with **Offline** enabled. Each device may belong to only one configured unmanaged switch per network. Nothing is polled on the unmanaged switch or its configured client IPs.
+
 ## Write gates
 
 Every write that eero-ui has **not** verified end-to-end against a live network sits behind `EERO_DASHBOARD_EXPERIMENTAL_WRITES`. With the flag off the routes exist but answer `403 {"type": "experimental_disabled"}`, and the UI hides the controls (the flag is reported by `GET /api/health` as `experimental_writes`). The verified writes — LED on/off and brightness, device rename and type, block and unblock (block live-verified 2026-10-06), guest network enable/disable and password, speed test, reboot one eero — are always available.

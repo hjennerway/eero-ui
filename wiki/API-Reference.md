@@ -24,7 +24,7 @@ Conventions that apply to every route below:
 |---|---|---|---|
 | `GET` | `/api/switches` | `list[SwitchSnapshot]` | Authenticated; optional `?network_id=`, defaults to preferred network. Empty list when not configured. Cached for 30 seconds. |
 
-Each snapshot contains `id`, `name`, `host`, `status` (`online` or `unreachable`), `model`, `mac`, `observed_at`, `warnings` and `ports`. Ports expose their interface ID, name, kind (`physical` or `lag`), status, speed in Mbps, learned MACs and LLDP neighbours. Configuration credentials are never returned. An unreachable switch has no port data; it does not fail other switches or the eero topology. Invalid or unreadable configuration returns a sanitized `503`. See [[Configuration#network-switches]].
+Each snapshot contains `id`, `name`, `host`, `status` (`online`, `unreachable` or `unknown`), `kind` (`managed` or `unmanaged`), `model`, `mac`, `observed_at`, `warnings` and `ports`. Ports expose their interface ID, name, kind (`physical` or `lag`), status, speed in Mbps, learned MACs and LLDP neighbours. Configuration credentials are never returned. An unreachable switch has no port data; it does not fail other switches or the eero topology. User-configured unmanaged snapshots have status `unknown`, empty host/ports and no observation time, with `upstream_switch_id`, `upstream_port_id`, `eero_ids` and `known_devices` (`mac`, `ip`, `name`) describing supplied wiring. Invalid or unreadable configuration returns a sanitized `503`. See [[Configuration#network-switches]].
 
 ## 🔐 Authentication (`/api/auth`)
 

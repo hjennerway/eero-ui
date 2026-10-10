@@ -277,6 +277,12 @@
 				<span>Inferred wired path</span>
 			</div>
 		{/if}
+		{#if nodes.some((node) => node.data.evidence === 'manual')}
+			<div class="legend-item">
+				<span class="legend-line manual"></span>
+				<span>User-supplied wiring</span>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Selected node details panel -->
@@ -296,11 +302,17 @@
 			<div class="details-content">
 				<dl>
 					<dt>Type</dt>
-					<dd class="capitalize">{$selectedNode.data.type}</dd>
+					<dd class="capitalize">
+						{$selectedNode.data.unmanaged ? 'Unmanaged switch' : $selectedNode.data.type}
+					</dd>
 
 					<dt>Status</dt>
 					<dd>
-						<span class="status-badge" class:online={$selectedNode.data.status === 'online'}>
+						<span
+							class="status-badge"
+							class:online={$selectedNode.data.status === 'online'}
+							class:unknown={$selectedNode.data.status === 'unknown'}
+						>
 							{$selectedNode.data.status}
 						</span>
 					</dd>
@@ -326,9 +338,11 @@
 					{#if $selectedNode.data.evidence}
 						<dt>Connection evidence</dt>
 						<dd>
-							{$selectedNode.data.evidence === 'lldp'
-								? 'Reported by LLDP neighbour discovery'
-								: 'Inferred from learned MAC address; may be behind another device'}
+							{$selectedNode.data.evidence === 'manual'
+								? 'Wiring supplied by the user'
+								: $selectedNode.data.evidence === 'lldp'
+									? 'Reported by LLDP neighbour discovery'
+									: 'Inferred from learned MAC address; may be behind another device'}
 						</dd>
 					{/if}
 					{#if $selectedNode.data.observedAt}
@@ -413,7 +427,7 @@
 				{/if}
 			</div>
 
-			{#if $selectedNode.data.type !== 'switch'}
+			{#if $selectedNode.data.type !== 'switch' && !$selectedNode.data.topologyOnly}
 				<div class="details-actions">
 					<Button
 						variant="primary"
@@ -677,6 +691,9 @@
 	.legend-line.inferred {
 		border-top: 2px dashed var(--color-success);
 	}
+	.legend-line.manual {
+		border-top: 2px dashed var(--color-text-muted);
+	}
 
 	/* Loading/Error/Empty overlays. --color-overlay tracks --color-bg-primary per theme, so the
 	   text tokens rendered on top always have the contrast that theme expects (previously a fixed
@@ -815,6 +832,10 @@
 	.status-badge.online {
 		background: var(--color-success-bg);
 		color: var(--color-success);
+	}
+	.status-badge.unknown {
+		background: var(--color-bg-tertiary);
+		color: var(--color-text-secondary);
 	}
 
 	.details-actions {

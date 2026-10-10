@@ -1,11 +1,41 @@
 import type { DeviceSummary, EeroSummary, SwitchSnapshot, SwitchPort } from '$api/types';
 
 export type TopologyEero = EeroSummary & { ethernet_addresses?: string[] | null };
+export type TopologyDevice = DeviceSummary & { topology_only?: boolean };
 export interface SwitchLink {
 	parent: string;
 	switchId: string;
 	port: SwitchPort;
-	evidence: 'lldp' | 'mac';
+	evidence: 'lldp' | 'mac' | 'manual';
+}
+
+/** Include static-IP clients absent from eero's inventory, identified by a known MAC. */
+export function withKnownSwitchDevices(
+	devices: DeviceSummary[],
+	switches: SwitchSnapshot[]
+): TopologyDevice[] {
+	const result: TopologyDevice[] = [...devices];
+	for (const sw of switches.filter((s) => s.kind === 'unmanaged')) {
+		const upstream = switches.find((s) => s.id === sw.upstream_switch_id);
+		const port = upstream?.ports.find((p) => p.id === sw.upstream_port_id);
+		for (const known of sw.known_devices ?? []) {
+			const mac = normalizeMac(known.mac);
+			if (!mac || result.some((d) => normalizeMac(d.mac) === mac)) continue;
+			result.push({
+				id: known.mac,
+				mac: known.mac,
+				ip: known.ip,
+				display_name: known.name,
+				wireless: false,
+				connected:
+					upstream?.status === 'online' &&
+					port?.status === 'up' &&
+					port.macs.some((m) => normalizeMac(m) === mac),
+				topology_only: true
+			} as TopologyDevice);
+		}
+	}
+	return result;
 }
 
 /** Locally administered addresses are valid identities, but never vendor evidence. */
@@ -110,7 +140,39 @@ export function resolveSwitchLinks(
 		const found = candidates(new Set([mac]), true);
 		if (found.length === 1) links.set(`device-${device.mac || device.id}`, found[0]);
 	}
-	// Conflicting neighbour reports must never introduce a graph cycle.
+	// A transparent switch cannot supply neighbour/port telemetry. Only explicit
+	// user wiring may insert one; several learned MACs alone are not proof.
+	for (const sw of switches.filter((s) => s.kind === 'unmanaged')) {
+		const upstream = switches.find((s) => s.kind !== 'unmanaged' && s.id === sw.upstream_switch_id);
+		if (!upstream || sw.upstream_port_id == null) continue;
+		const port = upstream.ports.find((p) => p.id === sw.upstream_port_id) ?? {
+			id: sw.upstream_port_id,
+			name: `Port ${sw.upstream_port_id}`,
+			kind: 'physical' as const,
+			status: 'unknown' as const,
+			speed_mbps: null,
+			macs: [],
+			neighbors: []
+		};
+		const link: SwitchLink = {
+			parent: `switch-${sw.id}`,
+			switchId: upstream.id,
+			port,
+			evidence: 'manual'
+		};
+		links.set(`switch-${sw.id}`, { ...link, parent: `switch-${upstream.id}` });
+		for (const eero of eeros) {
+			if (!eero.is_gateway && sw.eero_ids?.includes(eero.id)) links.set(`eero-${eero.id}`, link);
+		}
+		const knownMacs = new Set(
+			(sw.known_devices ?? []).map((d) => normalizeMac(d.mac)).filter(Boolean)
+		);
+		for (const device of devices) {
+			if (!device.wireless && knownMacs.has(normalizeMac(device.mac)))
+				links.set(`device-${device.mac || device.id}`, link);
+		}
+	}
+	// Conflicting observations or supplied wiring must never create a cycle.
 	for (const id of [...links.keys()]) {
 		const seen = new Set([id]);
 		let current = links.get(id)?.parent;

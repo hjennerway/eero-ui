@@ -6,7 +6,11 @@
 	let ports = $derived((data.ports ?? []).filter((p) => p.kind === 'physical'));
 </script>
 
-<div class="switch-node" class:selected class:unreachable={data.status === 'unreachable'}>
+<div
+	class="switch-node"
+	class:selected
+	class:unreachable={data.status === 'unreachable' || data.unmanaged}
+>
 	<Handle
 		type="target"
 		position={data.layoutType === 'horizontal' ? Position.Left : Position.Top}
@@ -14,19 +18,23 @@
 	<div class="heading">
 		<Icon name="ethernet" size={16} /><strong title={data.label}>{data.label}</strong>
 	</div>
-	<div class="address">{data.ipAddress}</div>
-	<div class="ports" aria-label="Switch port status">
-		{#each ports as port (port.id)}
-			<span
-				class:up={port.status === 'up'}
-				title={`${port.name}: ${port.status}${port.speed_mbps ? ` · ${port.speed_mbps} Mbps` : ''}`}
-			></span>
-		{/each}
-	</div>
+	<div class="address">{data.unmanaged ? 'Unmanaged switch' : data.ipAddress}</div>
+	{#if !data.unmanaged}
+		<div class="ports" aria-label="Switch port status">
+			{#each ports as port (port.id)}
+				<span
+					class:up={port.status === 'up'}
+					title={`${port.name}: ${port.status}${port.speed_mbps ? ` · ${port.speed_mbps} Mbps` : ''}`}
+				></span>
+			{/each}
+		</div>
+	{/if}
 	<div class="summary">
-		{data.status === 'unreachable'
-			? 'Unreachable'
-			: `${ports.filter((p) => p.status === 'up').length} active ports`}
+		{data.unmanaged
+			? 'User-supplied wiring · status unknown'
+			: data.status === 'unreachable'
+				? 'Unreachable'
+				: `${ports.filter((p) => p.status === 'up').length} active ports`}
 	</div>
 	<Handle
 		type="source"

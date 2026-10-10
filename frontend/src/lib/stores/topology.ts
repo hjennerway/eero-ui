@@ -3,7 +3,13 @@ import { writable, derived } from 'svelte/store';
 import type { Node, Edge } from '@xyflow/svelte';
 import { api } from '$api/client';
 import type { EeroSummary, DeviceSummary, SwitchSnapshot, SwitchPort } from '$api/types';
-import { normalizeMac, resolveSwitchLinks, type TopologyEero } from '#lib/utils/switch-links.js';
+import {
+	normalizeMac,
+	resolveSwitchLinks,
+	withKnownSwitchDevices,
+	type TopologyEero,
+	type TopologyDevice
+} from '#lib/utils/switch-links.js';
 
 export type NodeType = 'gateway' | 'eero' | 'switch' | 'device' | 'clientGroup';
 export type EdgeQuality = 'excellent' | 'good' | 'fair' | 'poor';
@@ -14,12 +20,14 @@ export interface TopologyNodeData extends Record<string, unknown> {
 	type: NodeType;
 	id: string;
 	label: string;
-	status: 'online' | 'offline' | 'unreachable';
+	status: 'online' | 'offline' | 'unreachable' | 'unknown';
+	unmanaged?: boolean;
+	topologyOnly?: boolean;
 	ports?: SwitchPort[];
 	observedAt?: string;
 	warnings?: string[];
 	portName?: string;
-	evidence?: 'lldp' | 'mac';
+	evidence?: 'lldp' | 'mac' | 'manual';
 	meshQuality?: number;
 	deviceCount?: number;
 	model?: string;
@@ -52,7 +60,7 @@ export interface TopologyEdgeData extends Record<string, unknown> {
 
 export interface TopologyState {
 	eeros: TopologyEero[];
-	devices: DeviceSummary[];
+	devices: TopologyDevice[];
 	switches: SwitchSnapshot[];
 	switchWarning: string | null;
 	loading: boolean;
@@ -125,7 +133,7 @@ function createTopologyStore() {
 				update((s) => ({
 					...s,
 					eeros: enriched,
-					devices,
+					devices: withKnownSwitchDevices(devices, switchResult.switches),
 					switches: switchResult.switches,
 					switchWarning: switchResult.warning,
 					loading: false
@@ -193,7 +201,7 @@ export const CLIENT_HEIGHT: Record<NodeDetailLevel, number> = {
 
 interface ClientGroup {
 	connectionType: 'wired' | 'wireless';
-	devices: DeviceSummary[];
+	devices: TopologyDevice[];
 }
 interface Cluster {
 	eero?: EeroSummary;
@@ -245,7 +253,7 @@ function getQualityColor(quality: EdgeQuality): string {
 
 export function transformToTopology(
 	eeros: TopologyEero[],
-	devices: DeviceSummary[],
+	devices: TopologyDevice[],
 	layoutType: LayoutType = 'hierarchy',
 	detailLevel: NodeDetailLevel = 'minimal',
 	switches: SwitchSnapshot[] = []
@@ -266,7 +274,7 @@ export function transformToTopology(
 			(a.location || a.model).localeCompare(b.location || b.model) ||
 			a.id.localeCompare(b.id)
 	);
-	const byEero = new Map<string | undefined, DeviceSummary[]>();
+	const byEero = new Map<string | undefined, TopologyDevice[]>();
 	for (const device of devices) {
 		if (switchMacs.has(normalizeMac(device.mac))) continue;
 		const eero = connectedEero(device, orderedEeros);
@@ -278,12 +286,31 @@ export function transformToTopology(
 	const clientHeight = CLIENT_HEIGHT[detailLevel];
 	const groupHeight = (count: number) =>
 		GROUP_HEADER + count * (clientHeight + ROW_GAP) - ROW_GAP + 16;
-	const orderedBranches = [
+	const sortedBranches = [
 		...orderedEeros.map((e) => branches.get(`eero-${e.id}`)!),
 		...branchList
 			.filter((b) => b.switch)
 			.sort((a, b) => a.label.localeCompare(b.label) || a.id.localeCompare(b.id))
 	];
+	// Keep each connected subtree contiguous. Alphabetical columns with the
+	// gateway's clients in the middle put their long stem across switch links.
+	const children = new Map<string | undefined, Branch[]>();
+	for (const branch of sortedBranches) {
+		const parent =
+			switchLinks.get(branch.id)?.parent ??
+			(branch.eero && branch.eero !== gateway && gateway ? `eero-${gateway.id}` : undefined);
+		children.set(parent, [...(children.get(parent) ?? []), branch]);
+	}
+	const orderedBranches: Branch[] = [];
+	const visited = new Set<string>();
+	const visit = (branch: Branch) => {
+		if (visited.has(branch.id)) return;
+		visited.add(branch.id);
+		orderedBranches.push(branch);
+		for (const child of children.get(branch.id) ?? []) visit(child);
+	};
+	for (const root of children.get(undefined) ?? []) visit(root);
+	for (const branch of sortedBranches) visit(branch);
 	const clusters: Cluster[] = [
 		...orderedBranches,
 		...(byEero.has(undefined) ? [undefined] : [])
@@ -324,10 +351,9 @@ export function transformToTopology(
 	if (layoutType === 'hierarchy' || layoutType === 'horizontal') {
 		const eeroY = detailLevel === 'minimal' ? 160 : 220;
 		const clientsY = (detailLevel === 'minimal' ? 280 : 420) + (maxDepth - 1) * eeroY;
-		// Reserve a dedicated gateway-client column/row between leaf branches.
-		const columns = [...leaves];
-		if (gatewayCluster?.groups.length)
-			columns.splice(Math.ceil(leaves.length / 2), 0, gatewayCluster);
+		// Put a parent's own clients before its descendants, outside the span of
+		// their links. Apply the same ordering to columns and horizontal rows.
+		const columns = clusters.filter((c) => c !== gatewayCluster || c.groups.length);
 		let cursor = 0;
 		for (const cluster of columns) {
 			if (layoutType === 'horizontal') {
@@ -386,10 +412,11 @@ export function transformToTopology(
 					id: sw.id,
 					label: sw.name,
 					status: sw.status,
+					unmanaged: sw.kind === 'unmanaged',
 					model: sw.model ?? undefined,
 					ipAddress: sw.host,
 					mac: sw.mac ?? undefined,
-					ports: sw.ports,
+					ports: sw.kind === 'unmanaged' ? undefined : sw.ports,
 					observedAt: sw.observed_at ?? undefined,
 					warnings: sw.warnings,
 					detailLevel,
@@ -434,16 +461,17 @@ export function transformToTopology(
 		const infrastructureLink = eeroId ? switchLinks.get(eeroId) : undefined;
 		if (infrastructureLink && eeroId) {
 			const node = nodes.find((n) => n.id === eeroId)!;
-			node.data.portName = infrastructureLink.port.name;
+			const knownSourcePort = branches.get(infrastructureLink.parent)?.switch?.kind !== 'unmanaged';
+			node.data.portName = knownSourcePort ? infrastructureLink.port.name : undefined;
 			node.data.evidence = infrastructureLink.evidence;
-			const speed = infrastructureLink.port.speed_mbps;
+			const speed = knownSourcePort ? infrastructureLink.port.speed_mbps : null;
 			edges.push({
 				id: `switch-link-${eeroId}`,
 				source: infrastructureLink.parent,
 				target: eeroId,
 				type: 'smoothstep',
-				label: `${infrastructureLink.port.name}${speed ? ` · ${speed >= 1000 ? `${speed / 1000} Gbps` : `${speed} Mbps`}` : ''} · ${infrastructureLink.evidence === 'lldp' ? 'LLDP' : 'Inferred'}`,
-				style: `stroke: var(--color-success); stroke-width: 2px;${infrastructureLink.evidence === 'mac' ? ' stroke-dasharray: 5 4;' : ''}`,
+				label: `${knownSourcePort ? `${infrastructureLink.port.name}${speed ? ` · ${speed >= 1000 ? `${speed / 1000} Gbps` : `${speed} Mbps`}` : ''} · ` : ''}${infrastructureLink.evidence === 'manual' ? 'User supplied' : infrastructureLink.evidence === 'lldp' ? 'LLDP' : 'Inferred'}`,
+				style: `stroke: var(--color-${infrastructureLink.evidence === 'manual' ? 'text-muted' : 'success'}); stroke-width: 2px;${infrastructureLink.evidence !== 'lldp' ? ' stroke-dasharray: 5 4;' : ''}`,
 				data: { quality: 'good', type: 'switch', connectionType: 'wired' }
 			});
 		}
@@ -469,7 +497,9 @@ export function transformToTopology(
 					type: 'clientGroup',
 					id: groupId,
 					label: sw
-						? 'Wired paths via switch'
+						? sw.kind === 'unmanaged'
+							? 'Known wired clients'
+							: 'Wired paths via switch'
 						: group.connectionType === 'wired'
 							? 'Wired clients'
 							: 'Wireless clients',
@@ -496,11 +526,17 @@ export function transformToTopology(
 						type: 'device',
 						id: deviceId,
 						label: deviceLabel(device),
-						status: device.connected ? 'online' : 'offline',
+						status: device.connected ? 'online' : device.topology_only ? 'unknown' : 'offline',
+						topologyOnly: device.topology_only,
+						warnings: device.topology_only
+							? [
+									'Not reported by eero. Activity is inferred from MAC learning on the upstream port.'
+								]
+							: undefined,
 						signal: device.signal_strength ?? undefined,
 						connectionType: group.connectionType,
 						eeroLabel: branch ? eeroLabel : 'Unknown eero',
-						portName: switchLink?.port.name,
+						portName: switchLink?.evidence === 'manual' ? undefined : switchLink?.port.name,
 						evidence: switchLink?.evidence,
 						ip: device.ip || undefined,
 						mac: device.mac || undefined,
@@ -513,14 +549,19 @@ export function transformToTopology(
 					}
 				});
 				if (!eeroId) return;
-				const color = group.connectionType === 'wired' ? 'success' : 'accent';
+				const color =
+					switchLink?.evidence === 'manual'
+						? 'text-muted'
+						: group.connectionType === 'wired'
+							? 'success'
+							: 'accent';
 				edges.push({
 					id: `client-${eero?.id ?? eeroId}-${deviceId}`,
 					source: eeroId,
 					target: `device-${deviceId}`,
 					type: 'client',
 					zIndex: 1,
-					style: `stroke: var(--color-${device.connected ? color : 'text-muted'}); stroke-width: 1.5px;${group.connectionType === 'wireless' || !device.connected || switchLink?.evidence === 'mac' ? ' stroke-dasharray: 5 4;' : ''}`,
+					style: `stroke: var(--color-${device.connected ? color : 'text-muted'}); stroke-width: 1.5px;${group.connectionType === 'wireless' || !device.connected || switchLink?.evidence === 'mac' || switchLink?.evidence === 'manual' ? ' stroke-dasharray: 5 4;' : ''}`,
 					data: {
 						quality: 'good',
 						type: 'client',

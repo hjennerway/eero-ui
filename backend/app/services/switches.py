@@ -27,6 +27,27 @@ from pysnmp.hlapi.v3arch.asyncio import (
 from pysnmp.proto.rfc1905 import EndOfMibView, NoSuchInstance, NoSuchObject
 
 
+class KnownSwitchDevice(BaseModel):
+    mac: str = Field(pattern=r"^(?:[0-9a-fA-F]{2}:){5}[0-9a-fA-F]{2}$")
+    ip: IPv4Address
+    name: str = Field(min_length=1, max_length=100)
+
+    @field_validator("mac")
+    @classmethod
+    def unicast_mac(cls, value: str) -> str:
+        if value == "00:00:00:00:00:00" or int(value[:2], 16) & 1:
+            raise ValueError("Use a unicast device MAC address")
+        return value.lower()
+
+
+class UnmanagedSwitchConfig(BaseModel):
+    id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
+    name: str = Field(min_length=1, max_length=100)
+    port: int = Field(ge=1)  # managed switch ifIndex
+    eero_ids: list[str] = Field(default_factory=list, max_length=8)
+    devices: list[KnownSwitchDevice] = Field(default_factory=list, max_length=32)
+
+
 class SwitchConfig(BaseModel):
     id: str = Field(pattern=r"^[a-zA-Z0-9_-]{1,64}$")
     network_id: str = Field(min_length=1, max_length=128)
@@ -34,6 +55,18 @@ class SwitchConfig(BaseModel):
     host: IPv4Address
     port: int = Field(default=161, ge=1, le=65535)
     community: SecretStr = Field(min_length=1, max_length=128)
+    unmanaged_switches: list[UnmanagedSwitchConfig] = Field(
+        default_factory=list, max_length=8
+    )
+
+    @field_validator("unmanaged_switches")
+    @classmethod
+    def unique_unmanaged_ports(cls, values: list[UnmanagedSwitchConfig]):
+        if len({v.id for v in values}) != len(values) or len(
+            {v.port for v in values}
+        ) != len(values):
+            raise ValueError("Unmanaged switch IDs and upstream ports must be unique")
+        return values
 
     @field_validator("host")
     @classmethod
@@ -66,12 +99,17 @@ class SwitchSnapshot(BaseModel):
     id: str
     name: str
     host: str
-    status: Literal["online", "unreachable"]
+    status: Literal["online", "unreachable", "unknown"]
+    kind: Literal["managed", "unmanaged"] = "managed"
     model: str | None = None
     mac: str | None = None
     observed_at: str | None = None
     ports: list[SwitchPort] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    upstream_switch_id: str | None = None
+    upstream_port_id: int | None = None
+    eero_ids: list[str] = Field(default_factory=list)
+    known_devices: list[KnownSwitchDevice] = Field(default_factory=list)
 
 
 # Keep requests small for older GS110TP firmware; cap each table and total time.
@@ -263,9 +301,7 @@ async def poll_switch(config: SwitchConfig) -> SwitchSnapshot:
                         snapshot.warnings.append(
                             f"{name} table exceeded the size limit"
                         )
-                        rows = (
-                            {}
-                        )  # Incomplete tables must not imply a physical connection.
+                        rows = {}  # Incomplete tables must not imply a physical connection.
                         break
                 tables[name] = rows
             snapshot.ports = normalize_ports(tables)
@@ -294,8 +330,25 @@ class SwitchInventory:
         if len(raw) > 65536:
             raise ValueError("Switch configuration is too large")
         configs = TypeAdapter(list[SwitchConfig]).validate_python(json.loads(raw))
-        if len(configs) > 16 or len({c.id for c in configs}) != len(configs):
+        all_ids = [
+            id
+            for c in configs
+            for id in [c.id, *(f"{c.id}--{u.id}" for u in c.unmanaged_switches)]
+        ]
+        if len(configs) > 16 or len(set(all_ids)) != len(all_ids):
             raise ValueError("Switch IDs must be unique, with at most 16 switches")
+        assignments = [
+            (c.network_id, kind, identity)
+            for c in configs
+            for u in c.unmanaged_switches
+            for kind, identity in [
+                *(("eero", e) for e in u.eero_ids),
+                *(("mac", d.mac) for d in u.devices),
+                *(("ip", str(d.ip)) for d in u.devices),
+            ]
+        ]
+        if len(assignments) != len(set(assignments)):
+            raise ValueError("Known wiring must assign each device to only one switch")
         selected = [c for c in configs if c.network_id == network_id]
         if len(selected) > 4:
             raise ValueError("At most four switches can be polled per network")
@@ -323,7 +376,29 @@ class SwitchInventory:
                 async with semaphore:
                     return await read_one(config)
 
-            return list(await asyncio.gather(*(limited(c) for c in selected)))
+            results = await asyncio.gather(*(limited(c) for c in selected))
+            snapshots = []
+            for config, result in zip(selected, results, strict=True):
+                snapshots.append(result)
+                for unmanaged in config.unmanaged_switches:
+                    snapshots.append(
+                        SwitchSnapshot(
+                            id=f"{config.id}--{unmanaged.id}",
+                            name=unmanaged.name,
+                            host="",
+                            status="unknown",
+                            kind="unmanaged",
+                            upstream_switch_id=config.id,
+                            upstream_port_id=unmanaged.port,
+                            eero_ids=unmanaged.eero_ids,
+                            known_devices=unmanaged.devices,
+                            warnings=[
+                                "Placement supplied by the user. This unmanaged switch "
+                                "does not report its status, ports or link speeds."
+                            ],
+                        )
+                    )
+            return snapshots
 
 
 switch_inventory = SwitchInventory()
