@@ -1,9 +1,12 @@
 """LAN scope, scan failure/freshness and authenticated discovery boundaries."""
 
 import json
+import os
 import subprocess
+import sys
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Network
+from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
@@ -11,6 +14,21 @@ from pydantic import ValidationError
 from app.config import settings
 from app.services import arp_scanner
 from app.services.discovery import DiscoverySnapshot, read_discovery
+
+
+def test_isolated_scanner_imports_without_any_dashboard_session_secret():
+    environment = {
+        k: v for k, v in os.environ.items() if k != "EERO_DASHBOARD_SESSION_SECRET"
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.services.arp_scanner"],
+        cwd=Path(__file__).resolve().parents[1],
+        env=environment,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def snapshot(**overrides):
