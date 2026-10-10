@@ -891,6 +891,7 @@ def _fixed(status: int, payload: Any) -> Handler:
 
 
 ROUTES: list[tuple[str, str, Handler]] = [
+    ("GET", "/api/switches", _fixed(200, [])),
     (
         "GET",
         "/api/health",

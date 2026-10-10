@@ -32,6 +32,7 @@
 	import DeviceNode from './nodes/DeviceNode.svelte';
 	import GatewayNode from './nodes/GatewayNode.svelte';
 	import ClientGroupNode from './nodes/ClientGroupNode.svelte';
+	import SwitchNode from './nodes/SwitchNode.svelte';
 	import ClientEdge from './ClientEdge.svelte';
 	import Icon from '$components/common/Icon.svelte';
 	import Button from '$components/common/Button.svelte';
@@ -65,7 +66,8 @@
 		gateway: GatewayNode,
 		eero: EeroNode,
 		device: DeviceNode,
-		clientGroup: ClientGroupNode
+		clientGroup: ClientGroupNode,
+		switch: SwitchNode
 	};
 	const edgeTypes: EdgeTypes = { client: ClientEdge };
 
@@ -185,6 +187,9 @@
 		/>
 	</div>
 
+	{#if $filteredTopology.switchWarning}
+		<p class="switch-warning" role="status">{$filteredTopology.switchWarning}</p>
+	{/if}
 	<div class="map-canvas">
 		{#if $filteredTopology.loading && nodes.length === 0}
 			<div class="loading-overlay">
@@ -262,11 +267,21 @@
 			<span class="legend-line mesh"></span>
 			<span>Eero links</span>
 		</div>
+		{#if nodes.some((node) => node.type === 'switch')}
+			<div class="legend-item">
+				<span class="legend-line switch-link"></span>
+				<span>Switch links (LLDP)</span>
+			</div>
+			<div class="legend-item">
+				<span class="legend-line inferred"></span>
+				<span>Inferred wired path</span>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Selected node details panel -->
 	{#if $selectedNode}
-		<div class="details-panel">
+		<div class="details-panel" class:switch-details={$selectedNode.data.type === 'switch'}>
 			<div class="details-header">
 				<h3>{$selectedNode.data.label}</h3>
 				<button
@@ -304,6 +319,22 @@
 						<dt>MAC</dt>
 						<dd class="mono">{$selectedNode.data.mac}</dd>
 					{/if}
+					{#if $selectedNode.data.portName}
+						<dt>Switch port</dt>
+						<dd>{$selectedNode.data.portName}</dd>
+					{/if}
+					{#if $selectedNode.data.evidence}
+						<dt>Connection evidence</dt>
+						<dd>
+							{$selectedNode.data.evidence === 'lldp'
+								? 'Reported by LLDP neighbour discovery'
+								: 'Inferred from learned MAC address; may be behind another device'}
+						</dd>
+					{/if}
+					{#if $selectedNode.data.observedAt}
+						<dt>Last read</dt>
+						<dd>{new Date($selectedNode.data.observedAt).toLocaleString()}</dd>
+					{/if}
 
 					{#if $selectedNode.data.connectionType}
 						<dt>Connection</dt>
@@ -312,7 +343,11 @@
 
 					{#if $selectedNode.data.eeroLabel}
 						<dt>
-							{$selectedNode.data.status === 'offline' ? 'Last connected to' : 'Connected to'}
+							{$selectedNode.data.evidence === 'mac'
+								? 'Path via'
+								: $selectedNode.data.status === 'offline'
+									? 'Last connected to'
+									: 'Connected to'}
 						</dt>
 						<dd>{$selectedNode.data.eeroLabel}</dd>
 					{/if}
@@ -342,31 +377,100 @@
 						<dd>{$selectedNode.data.profileName}</dd>
 					{/if}
 				</dl>
+				{#each $selectedNode.data.warnings ?? [] as warning}
+					<p role="status">{warning}</p>
+				{/each}
+				{#if $selectedNode.data.ports}
+					<p class="port-help">
+						Learned addresses include devices behind other switches and eeros.
+					</p>
+					<table class="port-table">
+						<caption>Switch ports</caption>
+						<thead><tr><th>Port</th><th>Link</th><th>MACs</th></tr></thead>
+						<tbody>
+							{#each $selectedNode.data.ports as port (port.id)}
+								<tr
+									><td>{port.name}{port.kind === 'lag' ? ' (LAG)' : ''}</td><td
+										>{port.status === 'up'
+											? port.speed_mbps
+												? `${port.speed_mbps} Mbps`
+												: 'Up'
+											: port.status}</td
+									><td>{port.macs.length}</td></tr
+								>
+								{#each port.neighbors as neighbor}
+									<tr
+										><td colspan="3" class="neighbor"
+											>LLDP: {neighbor.name || neighbor.chassis_mac || 'Neighbour'}{neighbor.port
+												? ` · port ${neighbor.port}`
+												: ''}</td
+										></tr
+									>
+								{/each}
+							{/each}
+						</tbody>
+					</table>
+				{/if}
 			</div>
 
-			<div class="details-actions">
-				<Button
-					variant="primary"
-					class="details-actions-btn"
-					onclick={() => {
-						const data = $selectedNode?.data;
-						if (!data) return;
-						if (data.type === 'gateway' || data.type === 'eero') {
-							goto(`/eeros/${data.id}`);
-						} else {
-							goto(`/devices/${data.id}`);
-						}
-					}}
-				>
-					View Details
-				</Button>
-			</div>
+			{#if $selectedNode.data.type !== 'switch'}
+				<div class="details-actions">
+					<Button
+						variant="primary"
+						class="details-actions-btn"
+						onclick={() => {
+							const data = $selectedNode?.data;
+							if (!data) return;
+							if (data.type === 'gateway' || data.type === 'eero') {
+								goto(`/eeros/${data.id}`);
+							} else {
+								goto(`/devices/${data.id}`);
+							}
+						}}
+					>
+						View Details
+					</Button>
+				</div>
+			{/if}
 		</div>
 	{/if}
 </div>
 
 <style>
+	.switch-warning {
+		margin: 0;
+		padding: 10px 16px;
+		color: var(--color-warning);
+		font-size: 12px;
+	}
+	.port-help {
+		font-size: 12px;
+		color: var(--color-text-secondary);
+		margin: 16px 0 8px;
+	}
+	.port-table {
+		width: 100%;
+		font-size: 12px;
+		text-align: left;
+		border-collapse: collapse;
+	}
+	.port-table caption {
+		text-align: left;
+		font-weight: 600;
+		margin-bottom: 8px;
+	}
+	.port-table th,
+	.port-table td {
+		padding: 6px 4px;
+		border-bottom: 1px solid var(--color-border);
+	}
+	.neighbor {
+		color: var(--color-text-secondary);
+		overflow-wrap: anywhere;
+	}
 	.topology-container {
+		--xy-edge-label-background-color: var(--color-bg-secondary);
+		--xy-edge-label-color: var(--color-text-primary);
 		display: flex;
 		flex-direction: column;
 		width: 100%;
@@ -522,6 +626,7 @@
 	.edge-legend {
 		flex-shrink: 0;
 		display: flex;
+		flex-wrap: wrap;
 		align-items: center;
 		gap: 12px;
 		background: var(--color-bg-secondary);
@@ -563,6 +668,14 @@
 			var(--color-accent),
 			var(--color-warning)
 		);
+	}
+
+	.legend-line.switch-link {
+		background: var(--color-success);
+	}
+
+	.legend-line.inferred {
+		border-top: 2px dashed var(--color-success);
 	}
 
 	/* Loading/Error/Empty overlays. --color-overlay tracks --color-bg-primary per theme, so the
@@ -619,6 +732,10 @@
 		border-radius: var(--radius-xl);
 		z-index: var(--z-sticky);
 		box-shadow: var(--shadow-lg);
+	}
+
+	.details-panel.switch-details {
+		width: 340px;
 	}
 
 	.details-header {

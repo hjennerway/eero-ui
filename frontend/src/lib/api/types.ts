@@ -444,6 +444,28 @@ export interface EeroSummary {
 	wired: boolean;
 }
 
+export interface SwitchPort {
+	id: number;
+	name: string;
+	kind: 'physical' | 'lag';
+	status: 'up' | 'down' | 'unknown';
+	speed_mbps: number | null;
+	macs: string[];
+	neighbors: { chassis_mac: string | null; name: string | null; port: string | null }[];
+}
+
+export interface SwitchSnapshot {
+	id: string;
+	name: string;
+	host: string;
+	status: 'online' | 'unreachable';
+	model: string | null;
+	mac: string | null;
+	observed_at: string | null;
+	ports: SwitchPort[];
+	warnings: string[];
+}
+
 export interface EthernetPort {
 	port_name: string | null;
 	interface_number: number | null;

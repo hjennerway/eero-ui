@@ -265,6 +265,9 @@ async function fetchWithHandling<T>(path: string, config: RequestConfig = {}): P
 // ============================================
 
 export const api = {
+	switches: {
+		list: () => fetchWithHandling<import('./types').SwitchSnapshot[]>('/switches', { retries: 0 })
+	},
 	// Health
 	health: () => fetchWithHandling<import('./types').HealthStatus>('/health'),
 

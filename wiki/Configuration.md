@@ -13,6 +13,7 @@ All settings are read once at startup from the environment (`backend/app/config.
 | `EERO_DASHBOARD_COOKIE_FILE` | Path of the eero credential file, owned by the `eero-api` SDK | `/data/session/session.json` (Docker) / `~/.eero-dashboard/session.json` (local) |
 | `EERO_DASHBOARD_VICTORIA_METRICS_URL` | VictoriaMetrics base URL. Used for **both** the collector's writes and the chart reads | `http://127.0.0.1:8428` |
 | `EERO_DASHBOARD_COLLECTION_INTERVAL` | Seconds between metrics collection cycles. Clamped to a minimum of `10` | `60` |
+| `EERO_DASHBOARD_SWITCHES_FILE` | Path to a private JSON file defining read-only SNMP switches for topology | unset (disabled) |
 | `EERO_DASHBOARD_METRICS_RETENTION` | How long the embedded VictoriaMetrics keeps data (`30d`, `6m`, `1y`). Shell-only: read by `container-start.sh`, not by Python | `1y` |
 | `EERO_DASHBOARD_SDK_GET_RETRIES` | How many times the SDK retries a failed **GET** against the eero cloud. Clamped to `0`–`3`. Writes are never retried | `1` |
 | `EERO_DASHBOARD_SDK_LEGACY_COOKIE` | Also send the session as the legacy `s=` cookie alongside the `X-User-Token` header. Off by default since 6.0 | `false` |
@@ -49,6 +50,29 @@ Metrics are collected by eero-ui's **own collector** (a task inside the FastAPI 
 - **Retention** — `EERO_DASHBOARD_METRICS_RETENTION` sets how long VictoriaMetrics keeps data. Accepted suffixes: `d` (days), `w` (weeks), `m` (months), `y` (years).
 - **Storage size** — old data is dropped only when it exceeds the retention period. Disk usage grows with the number of devices and the collection interval.
 - **External store** — because `EERO_DASHBOARD_VICTORIA_METRICS_URL` serves both the write and the read path, pointing it at an external VictoriaMetrics makes the embedded one idle. It still starts inside the container; that is harmless.
+
+## Network switches
+
+Topology can include managed switches using read-only **SNMP v2c**. The Netgear GS110TP has been verified with firmware 5.4.2.36. The collector uses standard IF-MIB, BRIDGE-MIB, Q-BRIDGE-MIB and LLDP-MIB tables; other models need to expose those tables. No switch settings are changed.
+
+1. Configure a read-only SNMP community on the switch, accessible from the dashboard server. The management webpage's port is independent of SNMP, which normally uses UDP 161. Keep SNMP access restricted to your trusted LAN; v2c does not encrypt the community.
+2. Copy `docs/switches.example.json` to a private file outside source control. Set its `host`, `community` and `network_id` (the ID in the dashboard's `/network/<id>` URL). Each switch needs a unique `id` and a display `name`.
+3. Set `EERO_DASHBOARD_SWITCHES_FILE` to that file's absolute path and restart the dashboard. For Docker, add these entries to the existing service, preserving its other environment variables and volumes:
+
+```yaml
+environment:
+  EERO_DASHBOARD_SWITCHES_FILE: /run/eero-ui/switches.json
+volumes:
+  - ./switches.json:/run/eero-ui/switches.json:ro
+```
+
+The container needs LAN access to the switch's UDP port; no extra inbound Docker port is needed. Credentials stay on the server and are never sent to the browser. Leaving the environment variable unset preserves the existing eero-only topology.
+
+Switch data is read when topology loads or refreshes and cached for 30 seconds. There are limits of four switches per network and sixteen total, with a twelve-second deadline per switch. Only explicitly configured private IPv4 addresses are polled. Unreachable switches remain visible without using their old connection data.
+
+Select a switch to see its port status, negotiated speeds, learned MAC counts and reported neighbours. **LLDP** identifies a neighbour reported on that port. Dashed **inferred** links use an unambiguous learned MAC address; they show the path through a port, which can include an unobserved switch. Eero Ethernet addresses are matched as well as their base MACs. Wireless clients stay with their eero, and clients learned behind an eero are not reassigned to its switch port.
+
+Ambiguous observations keep the existing eero association. MAC manufacturers alone cannot reveal cabling, and unmanaged switches cannot reliably be discovered from MAC learning. This integration does not provide VLAN diagrams or SNMP v3 authentication.
 
 ## Write gates
 

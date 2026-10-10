@@ -18,6 +18,14 @@ Conventions that apply to every route below:
 |---|---|---|---|---|
 | `GET` | `/api/health` | no | `{status, version, eero_client_version, experimental_writes}` | `experimental_writes` lets the UI hide gated controls |
 
+## Network switches (`/api/switches`)
+
+| Method | Endpoint | Response | Notes |
+|---|---|---|---|
+| `GET` | `/api/switches` | `list[SwitchSnapshot]` | Authenticated; optional `?network_id=`, defaults to preferred network. Empty list when not configured. Cached for 30 seconds. |
+
+Each snapshot contains `id`, `name`, `host`, `status` (`online` or `unreachable`), `model`, `mac`, `observed_at`, `warnings` and `ports`. Ports expose their interface ID, name, kind (`physical` or `lag`), status, speed in Mbps, learned MACs and LLDP neighbours. Configuration credentials are never returned. An unreachable switch has no port data; it does not fail other switches or the eero topology. Invalid or unreadable configuration returns a sanitized `503`. See [[Configuration#network-switches]].
+
 ## 🔐 Authentication (`/api/auth`)
 
 | Method | Endpoint | Auth | Limit | Request | Response | Notes |

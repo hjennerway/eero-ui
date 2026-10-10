@@ -242,6 +242,7 @@ describe('client groups', () => {
 		];
 		const loadEeros = vi.spyOn(api.eeros, 'list').mockResolvedValue(eeros);
 		const loadDevices = vi.spyOn(api.devices, 'list').mockResolvedValue(clients);
+		vi.spyOn(api.switches, 'list').mockResolvedValue([]);
 		await topologyStore.loadTopology();
 		expect(get(filteredTopology).nodes.filter((n) => n.type === 'clientGroup')).toHaveLength(1);
 		layoutOptionsStore.update((s) => ({ ...s, showOfflineDevices: true }));
@@ -255,5 +256,17 @@ describe('client groups', () => {
 		expect(get(filteredTopology).edges).toHaveLength(0);
 		expect(loadEeros).toHaveBeenCalledTimes(1);
 		expect(loadDevices).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps the eero topology available when optional switch data fails', async () => {
+		vi.spyOn(api.eeros, 'list').mockResolvedValue([eero('1', 'Living Room', true)]);
+		vi.spyOn(api.devices, 'list').mockResolvedValue([device(0, 'Living Room')]);
+		vi.spyOn(api.switches, 'list').mockRejectedValue(new Error('Switch unavailable'));
+		const details = vi.spyOn(api.eeros, 'get');
+		await topologyStore.loadTopology();
+		expect(get(topologyStore).error).toBeNull();
+		expect(get(topologyStore).switchWarning).toContain('Switch data is unavailable');
+		expect(get(filteredTopology).nodes.filter((n) => n.type === 'device')).toHaveLength(1);
+		expect(details).not.toHaveBeenCalled();
 	});
 });
