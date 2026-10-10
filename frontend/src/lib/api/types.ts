@@ -8,6 +8,63 @@
 // Authentication
 // ============================================
 
+export interface MQTTSettingsUpdate {
+	enabled: boolean;
+	broker_address: string;
+	username: string;
+	/** null preserves the saved password; an empty string removes it. */
+	password: string | null;
+	home_assistant_discovery: boolean;
+	discovery_prefix: string;
+}
+
+export type NASHealth = 'good' | 'warning' | 'critical' | 'unknown';
+
+export interface NASDisk {
+	id: string;
+	name: string;
+	enclosure_id: number | null;
+	bay: number | null;
+	model: string | null;
+	status: string | null;
+	smart_status: string | null;
+	health: NASHealth;
+	temperature_c: number | null;
+	capacity_bytes: number | null;
+}
+
+export interface NASStorage {
+	id: string;
+	name: string;
+	status: string | null;
+	health: NASHealth;
+	raid_level: string | null;
+	capacity_bytes: number | null;
+	free_bytes: number | null;
+	used_bytes: number | null;
+	used_percent: number | null;
+}
+
+export interface NASSnapshot {
+	id: string;
+	name: string;
+	host: string;
+	status: 'online' | 'unreachable';
+	model: string | null;
+	observed_at: string | null;
+	disks: NASDisk[];
+	volumes: NASStorage[];
+	pools: NASStorage[];
+	raids: NASStorage[];
+	warnings: string[];
+}
+
+export interface MQTTStatus extends Omit<MQTTSettingsUpdate, 'password'> {
+	password_set: boolean;
+	connection_status: 'disabled' | 'connecting' | 'connected' | 'error';
+	message: string | null;
+}
+
 export interface AuthStatus {
 	authenticated: boolean;
 	/**

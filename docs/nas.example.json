@@ -1,0 +1,10 @@
+[
+  {
+    "id": "qnap",
+    "network_id": "YOUR_EERO_NETWORK_ID",
+    "name": "QNAP TVS-473e",
+    "host": "192.168.4.2",
+    "port": 161,
+    "community": "YOUR_READ_ONLY_COMMUNITY"
+  }
+]

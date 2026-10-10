@@ -18,9 +18,22 @@ Conventions that apply to every route below:
 |---|---|---|---|---|
 | `GET` | `/api/health` | no | `{status, version, eero_client_version, experimental_writes}` | `experimental_writes` lets the UI hide gated controls |
 
+## MQTT (`/api/mqtt`)
+
+| Method | Endpoint | Request | Response | Notes |
+|---|---|---|---|---|
+| `GET` | `/api/mqtt` | — | `MQTTStatus` | Authenticated settings and connection status; never includes the password |
+| `PUT` | `/api/mqtt` | `{enabled, broker_address, username, password, home_assistant_discovery, discovery_prefix}` | `MQTTStatus` | Authenticated and CSRF protected; saves and reconnects without restarting the app |
+
+`MQTTStatus` includes all settings except `password`, plus `password_set`, `connection_status` (`disabled`, `connecting`, `connected`, `error`) and an optional `message`. In an update, `password: null` (or omitting it) preserves the saved secret; `password: ""` removes it. Enabled MQTT requires a valid broker address. Invalid settings return `422` without echoing inputs; unreadable or unwritable settings return a sanitized `503`. These local settings do not require the experimental eero write gate. See [[Configuration#mqtt-and-home-assistant]].
+
 ## LAN discovery (`/api/discovery`)
 
 `GET /api/discovery` requires authentication and accepts the usual optional `network_id`. It reads the configured scanner snapshot without initiating a scan. A different network receives an empty, disabled response. The response contains `status` (`disabled`, `pending`, `ok`, `error` or `stale`), `subnet`, `interval_seconds`, `last_scan`, `next_scan`, `warning` and `devices` (`ip`, `mac`, `last_seen`, `connected`). Failed or overdue observations have `connected=false`. Unreadable or invalid data returns a sanitized `503`. See [[Configuration#hourly-lan-discovery]].
+
+## QNAP NAS (`/api/nas`)
+
+`GET /api/nas` requires authentication and accepts the usual optional `network_id`, defaulting to the preferred network. It returns `list[NASSnapshot]`, or an empty list when no NAS is configured for that network. Snapshots include `id`, `name`, `host`, `status` (`online` or `unreachable`), `model`, `observed_at`, `warnings`, `disks`, `volumes`, `pools` and `raids`. Disk readings contain the SNMP index, reported enclosure/bay where available, model, operational/summary status, SMART summary, health (`good`, `warning`, `critical`, `unknown`), temperature in Celsius and capacity in bytes. Storage readings contain status/health, optional RAID level, total/free/used bytes and used percent. Missing measurements are null, and incomplete disk status cannot imply good health. Credentials are never returned. Polls are cached for thirty seconds with a fifteen-second deadline; failed polls return an unreachable snapshot with empty readings. Invalid or unreadable configuration returns a sanitized `503`. See [[Configuration#qnap-nas-health-and-storage]].
 
 ## Network switches (`/api/switches`)
 

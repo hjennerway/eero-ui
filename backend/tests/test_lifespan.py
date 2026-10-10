@@ -16,6 +16,9 @@ real, live task to cancel) and patched ``shutdown_client`` /
 """
 
 import asyncio
+from types import SimpleNamespace
+
+import pytest
 
 from app import main as main_module
 
@@ -66,6 +69,37 @@ async def _noop_async(*args, **kwargs) -> None:
     """A do-nothing async replacement for shutdown_client/aclose in tests
     that don't care about call ordering."""
     return
+
+
+async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkeypatch):
+    call_order = []
+    collector = FakeCollector()
+    collector.call_order = call_order
+
+    async def close_mqtt():
+        call_order.append("mqtt_closed")
+
+    mqtt_service = SimpleNamespace(
+        start=lambda: call_order.append("mqtt_started"),
+        publish_samples=lambda samples: None,
+        close=close_mqtt,
+    )
+    monkeypatch.setattr(main_module, "MQTTService", lambda *args: mqtt_service)
+    monkeypatch.setattr(
+        main_module, "MetricsCollector", lambda *args, **kwargs: collector
+    )
+    monkeypatch.setattr(
+        main_module, "_remove_legacy_exporter_session_file", lambda: None
+    )
+    monkeypatch.setattr(main_module, "shutdown_client", _noop_async)
+    monkeypatch.setattr(main_module.victoria_client, "aclose", _noop_async)
+    with pytest.raises(RuntimeError, match="lifespan interrupted"):
+        async with main_module.lifespan(main_module.app):
+            await asyncio.wait_for(collector.started.wait(), timeout=1)
+            assert main_module.app.state.mqtt_service is mqtt_service
+            raise RuntimeError("lifespan interrupted")
+    assert call_order == ["mqtt_started", "collector_task_cancelled", "mqtt_closed"]
+    assert main_module.app.state.mqtt_service is None
 
 
 class TestLifespanShutdownOrdering:

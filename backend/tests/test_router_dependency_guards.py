@@ -37,7 +37,17 @@ directly (TEST-SME investigation, 2026-09-24).
 """
 
 from app.deps import require_auth, validate_request_path_ids
-from app.routes import account, auth, devices, eeros, metrics, networks, profiles
+from app.routes import (
+    account,
+    auth,
+    devices,
+    eeros,
+    metrics,
+    mqtt,
+    nas,
+    networks,
+    profiles,
+)
 
 _ROUTER_PREFIXES = {
     "auth": ("/api/auth", auth.router),
@@ -47,6 +57,8 @@ _ROUTER_PREFIXES = {
     "profiles": ("/api/profiles", profiles.router),
     "metrics": ("/api/metrics", metrics.router),
     "account": ("/api/account", account.router),
+    "mqtt": ("/api/mqtt", mqtt.router),
+    "nas": ("/api/nas", nas.router),
 }
 # Mirrors app/main.py's app.include_router(...) calls; keep in sync if a
 # router or prefix changes there (this module cannot import app.routes

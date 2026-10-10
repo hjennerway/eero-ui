@@ -14,6 +14,7 @@ All settings are read once at startup from the environment (`backend/app/config.
 | `EERO_DASHBOARD_VICTORIA_METRICS_URL` | VictoriaMetrics base URL. Used for **both** the collector's writes and the chart reads | `http://127.0.0.1:8428` |
 | `EERO_DASHBOARD_COLLECTION_INTERVAL` | Seconds between metrics collection cycles. Clamped to a minimum of `10` | `60` |
 | `EERO_DASHBOARD_SWITCHES_FILE` | Path to a private JSON file defining read-only SNMP switches for topology | unset (disabled) |
+| `EERO_DASHBOARD_NAS_FILE` | Path to a private JSON file defining QNAP NAS devices for disk health and storage usage | unset (disabled) |
 | `EERO_DASHBOARD_DISCOVERY_FILE` | Path to the hourly LAN scanner's JSON snapshot | unset (disabled) |
 | `EERO_DASHBOARD_METRICS_RETENTION` | How long the embedded VictoriaMetrics keeps data (`30d`, `6m`, `1y`). Shell-only: read by `container-start.sh`, not by Python | `1y` |
 | `EERO_DASHBOARD_SDK_GET_RETRIES` | How many times the SDK retries a failed **GET** against the eero cloud. Clamped to `0`–`3`. Writes are never retried | `1` |
@@ -92,6 +93,37 @@ To include a known unmanaged switch, add `unmanaged_switches` to its managed ups
 ```
 
 `port` is the upstream interface ID from `/api/switches`, not an assumed socket number. Wiring is labelled **User supplied**. The unmanaged switch has no invented management address, port inventory, speed or online status. Known clients missing from eero's inventory appear in topology using their configured MAC and IP; activity comes from MAC learning on the upstream port, and clients with no current observation are available with **Offline** enabled. Each device may belong to only one configured unmanaged switch per network. Nothing is polled on the unmanaged switch or its configured client IPs.
+
+## QNAP NAS health and storage
+
+Open **NAS** in the sidebar to see disk status, SMART health summaries, temperatures, disk capacity, volume usage, storage pools and RAID status. This integration uses read-only **SNMP v2c** and QNAP's NAS-MIB under `1.3.6.1.4.1.24681`. It prefers the Storage Manager tables and falls back to older EX/system disk and volume tables. Firmware exposing only a different MIB is not supported yet; unsupported tables appear as unavailable. SNMP v3 and detailed SMART attributes/self-test history are not included.
+
+1. In QTS, go to **Control Panel → Network & File Services → SNMP**, enable SNMP service and select **SNMP v1/v2**. Set a read-only community and permit access from the dashboard server to the configured UDP port (normally 161). Restrict v2c to your trusted LAN because its community is transmitted unencrypted. See [QNAP's SNMP settings guide](https://docs.qnap.com/operating-system/qts/5.2.x/en-us/configuring-snmp-settings-42DBF952.html).
+2. Copy `docs/nas.example.json` to a private `nas.json`. The example uses your QNAP TVS-473e at `192.168.4.2`. Replace `community` and `network_id` with the actual values; the network ID is displayed on the NAS page and in the dashboard's `/network/<id>` URL. Keep credentials outside source control.
+3. Set `EERO_DASHBOARD_NAS_FILE` to the private file's path and restart the dashboard. For Docker:
+
+```yaml
+environment:
+  EERO_DASHBOARD_NAS_FILE: /run/eero-ui/nas.json
+volumes:
+  - ./nas.json:/run/eero-ui/nas.json:ro
+```
+
+The server must reach the NAS's UDP port; the QTS web/SSH ports are separate. There are no SNMP SET operations, disk tests, storage changes or network scans. Credentials remain server-side. Configurations support at most sixteen NAS devices total and four per network, with unique IDs and private LAN IPv4 addresses. Changes to the JSON file take effect on the next request.
+
+The NAS page refreshes every minute while open; readings are cached for thirty seconds and each poll has a fifteen-second deadline. Failed polls replace old readings with **Unreachable**. Missing SMART/status data remains **Unknown**, even when the NAS responds. Capacity usage is calculated from reported total/free bytes; inconsistent or missing readings are unavailable. Volume usage, pool allocation and RAID capacity describe different storage layers and should not be added together. Check detailed SMART information in QTS under **Storage & Snapshots → Disks/VJBOD → Health**.
+
+## MQTT and Home Assistant
+
+Open **MQTT** in the dashboard sidebar, enable MQTT, and enter your broker address and optional username/password. Addresses can be a hostname, `192.168.1.10:1883`, `mqtt://broker:1883`, or `mqtts://broker:8883` for TLS with certificate verification. IPv6 addresses use brackets, for example `mqtt://[::1]:1883`. The broker must be reachable from the dashboard container; `localhost` refers to that container.
+
+Enable **Home Assistant auto discovery** and configure Home Assistant's MQTT integration to use the same broker. The default discovery prefix is `homeassistant`; change it only if your Home Assistant integration uses another prefix. [Home Assistant's MQTT documentation](https://www.home-assistant.io/integrations/mqtt/) describes the integration and discovery settings.
+
+Each eero network appears as one device with four sensors: **Wired clients**, **Wireless clients**, **Latest speed test download**, and **Latest speed test upload**. Client counts include only connected devices of the corresponding connection type; unclassified devices are not guessed. Speeds are measured in Mbps and use existing test results, without running new tests. Data is published on the existing background collection interval (60 seconds by default).
+
+Settings are applied without restarting the dashboard. A blank password field preserves the saved password; **Remove saved password** clears it. Credentials are stored server-side in `mqtt.json` beside the eero session file (inside `/data` with the standard Docker setup), with owner-only permissions on POSIX systems. `EERO_DASHBOARD_MQTT_FILE` optionally overrides that path. The settings API returns only whether a password is saved.
+
+State topics are `eero_ui/<installation-id>/<network-key>/<sensor>/state`. Discovery configuration and states are retained with QoS 1. Sensors have stable identifiers, reannounce when Home Assistant starts, and become unavailable when the publisher disconnects or collection expires. Missing measurements appear as unknown rather than zero. Disabling MQTT retains the entities as unavailable; disabling auto discovery removes their retained discovery configuration from the currently connected broker. MQTT reconnects automatically after connection failures. Moving to another broker leaves any old retained entities on the previous broker unavailable.
 
 ## Hourly LAN discovery
 

@@ -265,6 +265,22 @@ async function fetchWithHandling<T>(path: string, config: RequestConfig = {}): P
 // ============================================
 
 export const api = {
+	nas: {
+		list: (networkId?: string) =>
+			fetchWithHandling<import('./types').NASSnapshot[]>(
+				`/nas${networkId ? `?network_id=${encodeURIComponent(networkId)}` : ''}`,
+				{ retries: 0 }
+			)
+	},
+	mqtt: {
+		get: () => fetchWithHandling<import('./types').MQTTStatus>('/mqtt', { retries: 0 }),
+		update: (settings: import('./types').MQTTSettingsUpdate) =>
+			fetchWithHandling<import('./types').MQTTStatus>('/mqtt', {
+				method: 'PUT',
+				body: settings,
+				retries: 0
+			})
+	},
 	discovery: {
 		get: () => fetchWithHandling<import('./types').DiscoveryResponse>('/discovery', { retries: 0 })
 	},
