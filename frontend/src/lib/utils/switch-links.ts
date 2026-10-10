@@ -1,7 +1,11 @@
 import type { DeviceSummary, EeroSummary, SwitchSnapshot, SwitchPort } from '$api/types';
 
 export type TopologyEero = EeroSummary & { ethernet_addresses?: string[] | null };
-export type TopologyDevice = DeviceSummary & { topology_only?: boolean };
+export type TopologyDevice = DeviceSummary & {
+	topology_only?: boolean;
+	discovery_source?: 'arp';
+	last_seen?: string;
+};
 export interface SwitchLink {
 	parent: string;
 	switchId: string;
@@ -136,6 +140,7 @@ export function resolveSwitchLinks(
 	}
 	for (const device of devices) {
 		const mac = normalizeMac(device.mac);
+		if ((device as TopologyDevice).discovery_source === 'arp') continue;
 		if (device.wireless || !device.connected || !mac || infrastructureMacs.has(mac)) continue;
 		const found = candidates(new Set([mac]), true);
 		if (found.length === 1) links.set(`device-${device.mac || device.id}`, found[0]);

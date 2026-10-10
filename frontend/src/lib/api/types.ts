@@ -471,6 +471,23 @@ export interface SwitchSnapshot {
 	known_devices?: { mac: string; ip: string; name: string }[];
 }
 
+export interface DiscoveredDevice {
+	ip: string;
+	mac: string;
+	last_seen: string;
+	connected: boolean;
+}
+
+export interface DiscoveryResponse {
+	status: 'disabled' | 'pending' | 'ok' | 'error' | 'stale';
+	subnet: string | null;
+	interval_seconds: number;
+	last_scan: string | null;
+	next_scan: string | null;
+	warning: string | null;
+	devices: DiscoveredDevice[];
+}
+
 export interface EthernetPort {
 	port_name: string | null;
 	interface_number: number | null;

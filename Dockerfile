@@ -61,7 +61,9 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    procps
+    procps \
+    arp-scan \
+    iproute2
 
 # Copy VictoriaMetrics binary (~15MB)
 COPY --from=vm-downloader /tmp/victoria-metrics-prod /usr/local/bin/victoria-metrics

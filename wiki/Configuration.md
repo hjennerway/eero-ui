@@ -14,6 +14,7 @@ All settings are read once at startup from the environment (`backend/app/config.
 | `EERO_DASHBOARD_VICTORIA_METRICS_URL` | VictoriaMetrics base URL. Used for **both** the collector's writes and the chart reads | `http://127.0.0.1:8428` |
 | `EERO_DASHBOARD_COLLECTION_INTERVAL` | Seconds between metrics collection cycles. Clamped to a minimum of `10` | `60` |
 | `EERO_DASHBOARD_SWITCHES_FILE` | Path to a private JSON file defining read-only SNMP switches for topology | unset (disabled) |
+| `EERO_DASHBOARD_DISCOVERY_FILE` | Path to the hourly LAN scanner's JSON snapshot | unset (disabled) |
 | `EERO_DASHBOARD_METRICS_RETENTION` | How long the embedded VictoriaMetrics keeps data (`30d`, `6m`, `1y`). Shell-only: read by `container-start.sh`, not by Python | `1y` |
 | `EERO_DASHBOARD_SDK_GET_RETRIES` | How many times the SDK retries a failed **GET** against the eero cloud. Clamped to `0`–`3`. Writes are never retried | `1` |
 | `EERO_DASHBOARD_SDK_LEGACY_COOKIE` | Also send the session as the legacy `s=` cookie alongside the `X-User-Token` header. Off by default since 6.0 | `false` |
@@ -91,6 +92,25 @@ To include a known unmanaged switch, add `unmanaged_switches` to its managed ups
 ```
 
 `port` is the upstream interface ID from `/api/switches`, not an assumed socket number. Wiring is labelled **User supplied**. The unmanaged switch has no invented management address, port inventory, speed or online status. Known clients missing from eero's inventory appear in topology using their configured MAC and IP; activity comes from MAC learning on the upstream port, and clients with no current observation are available with **Offline** enabled. Each device may belong to only one configured unmanaged switch per network. Nothing is polled on the unmanaged switch or its configured client IPs.
+
+## Hourly LAN discovery
+
+An optional ARP scanner finds local IPv4 devices that eero does not report, including devices with static IP addresses. Enable the `eero-discovery` worker and volume in `docker-compose.yml`, then mount its snapshot read-only into the dashboard and set `EERO_DASHBOARD_DISCOVERY_FILE=/discovery/arp.json`.
+
+The worker runs on a **Linux Docker host** with `network_mode: host`, drops all capabilities except `NET_RAW`, and has no dashboard session or eero credentials. The dashboard retains its existing bridge networking and published ports. Set these worker variables:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `EERO_DISCOVERY_NETWORK_ID` | The eero network to associate with this physical LAN | required |
+| `EERO_DISCOVERY_SUBNET` | Explicit, directly attached private IPv4 subnet, `/22`–`/30` | required |
+| `EERO_DISCOVERY_INTERVAL` | Seconds between scans, minimum 3600 | `3600` |
+| `EERO_DISCOVERY_FILE` | Persistent snapshot output | `/discovery/arp.json` |
+
+Scanning starts immediately on first launch, then every hour by default, even when no browser is open. Restarts preserve the next due time. Each scan has a 45-second deadline, two attempts per host and a 64 Kbit/s sending limit. It uses the host's LAN route and refuses routed targets; it never substitutes the Docker bridge subnet. It sends ARP requests only, with no port scans, camera logins or eero writes.
+
+Topology refreshes the discovery snapshot every minute while open. New devices are grouped under **ARP discovered**, with IP/MAC and last-seen time. Dotted grey links originate at the gateway as placeholders: ARP does **not** identify their switch, port or wireless connection. Devices already reported by eero, configured known clients, switches and eero addresses are deduplicated. Once eero reports a device, a topology refresh replaces its ARP placeholder with the normal device record.
+
+Devices absent from a later scan are retained for seven days, marked unconfirmed and shown with **Offline** enabled. Failed or overdue scans never report old observations as current. ARP is restricted to the scanner's local broadcast domain, does not discover IPv6-only devices, and can miss sleeping or isolated clients.
 
 ## Write gates
 

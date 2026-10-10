@@ -18,6 +18,10 @@ Conventions that apply to every route below:
 |---|---|---|---|---|
 | `GET` | `/api/health` | no | `{status, version, eero_client_version, experimental_writes}` | `experimental_writes` lets the UI hide gated controls |
 
+## LAN discovery (`/api/discovery`)
+
+`GET /api/discovery` requires authentication and accepts the usual optional `network_id`. It reads the configured scanner snapshot without initiating a scan. A different network receives an empty, disabled response. The response contains `status` (`disabled`, `pending`, `ok`, `error` or `stale`), `subnet`, `interval_seconds`, `last_scan`, `next_scan`, `warning` and `devices` (`ip`, `mac`, `last_seen`, `connected`). Failed or overdue observations have `connected=false`. Unreadable or invalid data returns a sanitized `503`. See [[Configuration#hourly-lan-discovery]].
+
 ## Network switches (`/api/switches`)
 
 | Method | Endpoint | Response | Notes |

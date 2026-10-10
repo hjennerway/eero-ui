@@ -37,6 +37,7 @@ class Settings(BaseModel):
 
     # Optional local, per-network switch inventory. Credentials stay server-side.
     switches_file: str | None = None
+    discovery_file: str | None = None
 
     # eero-api SDK tuning (phase-6.0-revamp.md § 3.1, decision 6)
     sdk_legacy_cookie: bool = False
@@ -106,6 +107,7 @@ def get_settings() -> Settings:
             10, int(os.environ.get("EERO_DASHBOARD_COLLECTION_INTERVAL", "60"))
         ),
         switches_file=os.environ.get("EERO_DASHBOARD_SWITCHES_FILE") or None,
+        discovery_file=os.environ.get("EERO_DASHBOARD_DISCOVERY_FILE") or None,
         sdk_legacy_cookie=os.environ.get(
             "EERO_DASHBOARD_SDK_LEGACY_COOKIE", "false"
         ).lower()

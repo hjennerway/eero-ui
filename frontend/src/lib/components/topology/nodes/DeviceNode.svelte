@@ -13,9 +13,9 @@
 	interface Props {
 		data: {
 			label: string;
-			status: 'online' | 'offline';
+			status: 'online' | 'offline' | 'unknown';
 			signal?: number;
-			connectionType?: 'wired' | 'wireless';
+			connectionType?: 'wired' | 'wireless' | 'unknown';
 			ip?: string;
 			mac?: string;
 			manufacturer?: string;
@@ -37,6 +37,7 @@
 <div
 	class="device-node {statusClass}"
 	class:wired={data.connectionType === 'wired'}
+	class:unknown={data.connectionType === 'unknown'}
 	style:height="{CLIENT_HEIGHT[detailLevel]}px"
 	class:selected
 	class:blocked={data.isBlocked}
@@ -47,8 +48,22 @@
 
 	<div class="device-content">
 		<span class="device-icon"><Icon name={deviceIcon} size={16} /></span>
-		<span class="connection-icon" title={data.connectionType === 'wired' ? 'Wired' : 'Wireless'}>
-			<Icon name={data.connectionType === 'wired' ? 'ethernet' : 'wifi'} size={12} />
+		<span
+			class="connection-icon"
+			title={data.connectionType === 'unknown'
+				? 'Physical connection unknown'
+				: data.connectionType === 'wired'
+					? 'Wired'
+					: 'Wireless'}
+		>
+			<Icon
+				name={data.connectionType === 'unknown'
+					? 'help-circle'
+					: data.connectionType === 'wired'
+						? 'ethernet'
+						: 'wifi'}
+				size={12}
+			/>
 		</span>
 		<span class="device-label" title={data.label}>{data.label}</span>
 
@@ -108,6 +123,10 @@
 
 	.device-node.wired {
 		--connection-color: var(--color-success);
+	}
+	.device-node.unknown {
+		--connection-color: var(--color-text-muted);
+		border-style: dotted;
 	}
 
 	.connection-icon {

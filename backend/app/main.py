@@ -36,7 +36,17 @@ from .deps import (
     get_eero_client,
     shutdown_client,
 )
-from .routes import account, auth, devices, eeros, metrics, networks, profiles, switches
+from .routes import (
+    account,
+    auth,
+    devices,
+    discovery,
+    eeros,
+    metrics,
+    networks,
+    profiles,
+    switches,
+)
 from .services.collector import MetricsCollector
 from .services.victoria import victoria_client
 
@@ -400,6 +410,7 @@ app.include_router(profiles.router, prefix="/api/profiles", tags=["Profiles"])
 app.include_router(metrics.router, prefix="/api/metrics", tags=["Metrics"])
 app.include_router(account.router, prefix="/api/account", tags=["Account"])
 app.include_router(switches.router, prefix="/api/switches", tags=["Switches"])
+app.include_router(discovery.router, prefix="/api/discovery", tags=["LAN discovery"])
 
 
 # Health check

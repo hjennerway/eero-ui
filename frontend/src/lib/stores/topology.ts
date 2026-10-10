@@ -2,7 +2,14 @@
 import { writable, derived } from 'svelte/store';
 import type { Node, Edge } from '@xyflow/svelte';
 import { api } from '$api/client';
-import type { EeroSummary, DeviceSummary, SwitchSnapshot, SwitchPort } from '$api/types';
+import type {
+	EeroSummary,
+	DeviceSummary,
+	SwitchSnapshot,
+	SwitchPort,
+	DiscoveryResponse
+} from '$api/types';
+import { withDiscoveredDevices } from '#lib/utils/discovery.js';
 import {
 	normalizeMac,
 	resolveSwitchLinks,
@@ -27,7 +34,7 @@ export interface TopologyNodeData extends Record<string, unknown> {
 	observedAt?: string;
 	warnings?: string[];
 	portName?: string;
-	evidence?: 'lldp' | 'mac' | 'manual';
+	evidence?: 'lldp' | 'mac' | 'manual' | 'arp';
 	meshQuality?: number;
 	deviceCount?: number;
 	model?: string;
@@ -36,7 +43,7 @@ export interface TopologyNodeData extends Record<string, unknown> {
 	ipAddress?: string;
 	firmwareVersion?: string;
 	signal?: number;
-	connectionType?: 'wired' | 'wireless';
+	connectionType?: 'wired' | 'wireless' | 'unknown';
 	ip?: string;
 	mac?: string;
 	manufacturer?: string;
@@ -51,7 +58,7 @@ export interface TopologyNodeData extends Record<string, unknown> {
 export interface TopologyEdgeData extends Record<string, unknown> {
 	quality: EdgeQuality;
 	type: 'mesh' | 'client' | 'switch';
-	connectionType?: 'wired' | 'wireless';
+	connectionType?: 'wired' | 'wireless' | 'unknown';
 	/** Distance from the client's left handle to the shared branch above its group. */
 	branchOffset?: number;
 	previousRowOffset?: number;
@@ -63,6 +70,7 @@ export interface TopologyState {
 	devices: TopologyDevice[];
 	switches: SwitchSnapshot[];
 	switchWarning: string | null;
+	discovery: DiscoveryResponse | null;
 	loading: boolean;
 	error: string | null;
 }
@@ -79,6 +87,7 @@ const initialState: TopologyState = {
 	devices: [],
 	switches: [],
 	switchWarning: null,
+	discovery: null,
 	loading: false,
 	error: null
 };
@@ -101,7 +110,7 @@ function createTopologyStore() {
 			const currentRequest = ++request;
 			update((s) => ({ ...s, loading: true, error: null }));
 			try {
-				const [eeros, devices, switchResult] = await Promise.all([
+				const [eeros, devices, switchResult, discovery] = await Promise.all([
 					api.eeros.list(true),
 					api.devices.list({ refresh: true }),
 					api.switches
@@ -110,10 +119,11 @@ function createTopologyStore() {
 						.catch(() => ({
 							switches: [],
 							warning: 'Switch data is unavailable. Eero connections are still shown.'
-						}))
+						})),
+					loadDiscovery()
 				]);
 				const enriched: TopologyEero[] = [...eeros];
-				if (switchResult.switches.length) {
+				if (switchResult.switches.length || discovery.status !== 'disabled') {
 					// Physical Ethernet addresses can differ from the eero's base MAC.
 					for (let i = 0; i < eeros.length; i += 4) {
 						if (currentRequest !== request) return;
@@ -133,9 +143,15 @@ function createTopologyStore() {
 				update((s) => ({
 					...s,
 					eeros: enriched,
-					devices: withKnownSwitchDevices(devices, switchResult.switches),
+					devices: withDiscoveredDevices(
+						withKnownSwitchDevices(devices, switchResult.switches),
+						enriched,
+						switchResult.switches,
+						discovery
+					),
 					switches: switchResult.switches,
 					switchWarning: switchResult.warning,
+					discovery,
 					loading: false
 				}));
 			} catch (error) {
@@ -147,6 +163,16 @@ function createTopologyStore() {
 				}));
 			}
 		},
+		async refreshDiscovery(): Promise<void> {
+			const currentRequest = request;
+			const discovery = await loadDiscovery();
+			if (currentRequest !== request) return;
+			update((s) => ({
+				...s,
+				discovery,
+				devices: withDiscoveredDevices(s.devices, s.eeros, s.switches, discovery)
+			}));
+		},
 		selectNode(nodeId: string | null): void {
 			selectedNodeId.set(nodeId);
 		},
@@ -156,6 +182,22 @@ function createTopologyStore() {
 			set(initialState);
 		}
 	};
+}
+
+async function loadDiscovery(): Promise<DiscoveryResponse> {
+	try {
+		return await api.discovery.get();
+	} catch {
+		return {
+			status: 'error',
+			subnet: null,
+			interval_seconds: 3600,
+			last_scan: null,
+			next_scan: null,
+			warning: 'LAN discovery is unavailable. Eero and switch connections are still shown.',
+			devices: []
+		};
+	}
 }
 
 export const topologyStore = createTopologyStore();
@@ -175,7 +217,8 @@ export const filteredTopology = derived(
 		),
 		loading: $topology.loading,
 		error: $topology.error,
-		switchWarning: $topology.switchWarning
+		switchWarning: $topology.switchWarning,
+		discovery: $topology.discovery
 	})
 );
 
@@ -200,7 +243,7 @@ export const CLIENT_HEIGHT: Record<NodeDetailLevel, number> = {
 };
 
 interface ClientGroup {
-	connectionType: 'wired' | 'wireless';
+	connectionType: 'wired' | 'wireless' | 'unknown';
 	devices: TopologyDevice[];
 }
 interface Cluster {
@@ -279,8 +322,12 @@ export function transformToTopology(
 		if (switchMacs.has(normalizeMac(device.mac))) continue;
 		const eero = connectedEero(device, orderedEeros);
 		const id =
-			switchLinks.get(`device-${device.mac || device.id}`)?.parent ??
-			(eero ? `eero-${eero.id}` : undefined);
+			device.discovery_source === 'arp'
+				? gateway
+					? `eero-${gateway.id}`
+					: undefined
+				: (switchLinks.get(`device-${device.mac || device.id}`)?.parent ??
+					(eero ? `eero-${eero.id}` : undefined));
 		byEero.set(id, [...(byEero.get(id) ?? []), device]);
 	}
 	const clientHeight = CLIENT_HEIGHT[detailLevel];
@@ -317,16 +364,22 @@ export function transformToTopology(
 	].map((branch) => {
 		const eero = branch?.eero;
 		const clients = byEero.get(branch?.id) ?? [];
-		const groups: ClientGroup[] = (['wired', 'wireless'] as const).flatMap((connectionType) => {
-			const groupDevices = clients
-				.filter((d) => (d.wireless ? 'wireless' : 'wired') === connectionType)
-				.sort(
-					(a, b) =>
-						Number(b.connected) - Number(a.connected) ||
-						deviceLabel(a).localeCompare(deviceLabel(b))
-				);
-			return groupDevices.length ? [{ connectionType, devices: groupDevices }] : [];
-		});
+		const groups: ClientGroup[] = (['wired', 'wireless', 'unknown'] as const).flatMap(
+			(connectionType) => {
+				const groupDevices = clients
+					.filter(
+						(d) =>
+							(d.discovery_source === 'arp' ? 'unknown' : d.wireless ? 'wireless' : 'wired') ===
+							connectionType
+					)
+					.sort(
+						(a, b) =>
+							Number(b.connected) - Number(a.connected) ||
+							deviceLabel(a).localeCompare(deviceLabel(b))
+					);
+				return groupDevices.length ? [{ connectionType, devices: groupDevices }] : [];
+			}
+		);
 		return {
 			eero,
 			branch,
@@ -496,16 +549,19 @@ export function transformToTopology(
 				data: {
 					type: 'clientGroup',
 					id: groupId,
-					label: sw
-						? sw.kind === 'unmanaged'
-							? 'Known wired clients'
-							: 'Wired paths via switch'
-						: group.connectionType === 'wired'
-							? 'Wired clients'
-							: 'Wireless clients',
+					label:
+						group.connectionType === 'unknown'
+							? 'ARP discovered'
+							: sw
+								? sw.kind === 'unmanaged'
+									? 'Known wired clients'
+									: 'Wired paths via switch'
+								: group.connectionType === 'wired'
+									? 'Wired clients'
+									: 'Wireless clients',
 					status: 'online',
 					connectionType: group.connectionType,
-					eeroLabel,
+					eeroLabel: group.connectionType === 'unknown' ? 'Physical connection unknown' : eeroLabel,
 					deviceCount: group.devices.length
 				}
 			});
@@ -527,17 +583,28 @@ export function transformToTopology(
 						id: deviceId,
 						label: deviceLabel(device),
 						status: device.connected ? 'online' : device.topology_only ? 'unknown' : 'offline',
+						observedAt: device.last_seen,
 						topologyOnly: device.topology_only,
-						warnings: device.topology_only
-							? [
-									'Not reported by eero. Activity is inferred from MAC learning on the upstream port.'
-								]
-							: undefined,
+						warnings:
+							device.discovery_source === 'arp'
+								? [
+										'Not reported by eero. Responded to a LAN ARP scan; the dotted gateway link is a placeholder, not confirmed wiring. Status reflects the last scan.'
+									]
+								: device.topology_only
+									? [
+											'Not reported by eero. Activity is inferred from MAC learning on the upstream port.'
+										]
+									: undefined,
 						signal: device.signal_strength ?? undefined,
 						connectionType: group.connectionType,
-						eeroLabel: branch ? eeroLabel : 'Unknown eero',
+						eeroLabel:
+							device.discovery_source === 'arp'
+								? 'Physical connection unknown'
+								: branch
+									? eeroLabel
+									: 'Unknown eero',
 						portName: switchLink?.evidence === 'manual' ? undefined : switchLink?.port.name,
-						evidence: switchLink?.evidence,
+						evidence: device.discovery_source === 'arp' ? 'arp' : switchLink?.evidence,
 						ip: device.ip || undefined,
 						mac: device.mac || undefined,
 						manufacturer: device.manufacturer || undefined,
@@ -550,7 +617,7 @@ export function transformToTopology(
 				});
 				if (!eeroId) return;
 				const color =
-					switchLink?.evidence === 'manual'
+					device.discovery_source === 'arp' || switchLink?.evidence === 'manual'
 						? 'text-muted'
 						: group.connectionType === 'wired'
 							? 'success'
@@ -561,7 +628,7 @@ export function transformToTopology(
 					target: `device-${deviceId}`,
 					type: 'client',
 					zIndex: 1,
-					style: `stroke: var(--color-${device.connected ? color : 'text-muted'}); stroke-width: 1.5px;${group.connectionType === 'wireless' || !device.connected || switchLink?.evidence === 'mac' || switchLink?.evidence === 'manual' ? ' stroke-dasharray: 5 4;' : ''}`,
+					style: `stroke: var(--color-${device.connected ? color : 'text-muted'}); stroke-width: 1.5px;${device.discovery_source === 'arp' ? ' stroke-dasharray: 1 5; stroke-linecap: round;' : group.connectionType === 'wireless' || !device.connected || switchLink?.evidence === 'mac' || switchLink?.evidence === 'manual' ? ' stroke-dasharray: 5 4;' : ''}`,
 					data: {
 						quality: 'good',
 						type: 'client',

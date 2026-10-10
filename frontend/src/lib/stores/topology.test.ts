@@ -6,7 +6,7 @@
  * i.e. on the leaf-eero row - so eeros disappeared behind devices.
  */
 
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { api } from '$api/client';
 import type { DeviceSummary, EeroSummary } from '$api/types';
@@ -23,6 +23,18 @@ import {
 
 const NODE_W = 130;
 const NODE_H = 60;
+
+beforeEach(() => {
+	vi.spyOn(api.discovery, 'get').mockResolvedValue({
+		status: 'disabled',
+		subnet: null,
+		interval_seconds: 3600,
+		last_scan: null,
+		next_scan: null,
+		warning: null,
+		devices: []
+	});
+});
 
 function eero(id: string, location: string, isGateway = false): EeroSummary {
 	return {

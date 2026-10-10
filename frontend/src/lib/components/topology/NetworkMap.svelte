@@ -78,6 +78,12 @@
 	// Load topology on mount
 	onMount(() => {
 		topologyStore.loadTopology();
+		const timer = setInterval(() => {
+			if ($filteredTopology.discovery && $filteredTopology.discovery.status !== 'disabled') {
+				topologyStore.refreshDiscovery();
+			}
+		}, 60000);
+		return () => clearInterval(timer);
 	});
 
 	onDestroy(() => {
@@ -190,6 +196,18 @@
 	{#if $filteredTopology.switchWarning}
 		<p class="switch-warning" role="status">{$filteredTopology.switchWarning}</p>
 	{/if}
+	{#if $filteredTopology.discovery?.status !== 'disabled' && $filteredTopology.discovery}
+		<p class="discovery-status" role="status">
+			{#if $filteredTopology.discovery.warning}
+				{$filteredTopology.discovery.warning}
+			{:else if $filteredTopology.discovery.last_scan}
+				LAN scan: {new Date($filteredTopology.discovery.last_scan).toLocaleString()} · {$filteredTopology
+					.discovery.interval_seconds === 3600
+					? 'Hourly'
+					: `Every ${$filteredTopology.discovery.interval_seconds / 3600} hours`}
+			{/if}
+		</p>
+	{/if}
 	<div class="map-canvas">
 		{#if $filteredTopology.loading && nodes.length === 0}
 			<div class="loading-overlay">
@@ -283,6 +301,12 @@
 				<span>User-supplied wiring</span>
 			</div>
 		{/if}
+		{#if nodes.some((node) => node.data.evidence === 'arp')}
+			<div class="legend-item">
+				<span class="legend-line arp"></span>
+				<span>ARP discovered · connection unknown</span>
+			</div>
+		{/if}
 	</div>
 
 	<!-- Selected node details panel -->
@@ -313,7 +337,11 @@
 							class:online={$selectedNode.data.status === 'online'}
 							class:unknown={$selectedNode.data.status === 'unknown'}
 						>
-							{$selectedNode.data.status}
+							{$selectedNode.data.evidence === 'arp'
+								? $selectedNode.data.status === 'online'
+									? 'Seen in last scan'
+									: 'Unconfirmed'
+								: $selectedNode.data.status}
 						</span>
 					</dd>
 
@@ -338,15 +366,17 @@
 					{#if $selectedNode.data.evidence}
 						<dt>Connection evidence</dt>
 						<dd>
-							{$selectedNode.data.evidence === 'manual'
-								? 'Wiring supplied by the user'
-								: $selectedNode.data.evidence === 'lldp'
-									? 'Reported by LLDP neighbour discovery'
-									: 'Inferred from learned MAC address; may be behind another device'}
+							{$selectedNode.data.evidence === 'arp'
+								? 'ARP response; physical connection unknown'
+								: $selectedNode.data.evidence === 'manual'
+									? 'Wiring supplied by the user'
+									: $selectedNode.data.evidence === 'lldp'
+										? 'Reported by LLDP neighbour discovery'
+										: 'Inferred from learned MAC address; may be behind another device'}
 						</dd>
 					{/if}
 					{#if $selectedNode.data.observedAt}
-						<dt>Last read</dt>
+						<dt>{$selectedNode.data.evidence === 'arp' ? 'Last seen' : 'Last read'}</dt>
 						<dd>{new Date($selectedNode.data.observedAt).toLocaleString()}</dd>
 					{/if}
 
@@ -355,7 +385,7 @@
 						<dd class="capitalize">{$selectedNode.data.connectionType}</dd>
 					{/if}
 
-					{#if $selectedNode.data.eeroLabel}
+					{#if $selectedNode.data.eeroLabel && $selectedNode.data.evidence !== 'arp'}
 						<dt>
 							{$selectedNode.data.evidence === 'mac'
 								? 'Path via'
@@ -451,6 +481,12 @@
 </div>
 
 <style>
+	.discovery-status {
+		margin: 0;
+		padding: 6px 16px;
+		color: var(--color-text-secondary);
+		font-size: 12px;
+	}
 	.switch-warning {
 		margin: 0;
 		padding: 10px 16px;
@@ -693,6 +729,10 @@
 	}
 	.legend-line.manual {
 		border-top: 2px dashed var(--color-text-muted);
+	}
+	.legend-line.arp {
+		border-color: var(--color-text-muted);
+		border-top-style: dotted;
 	}
 
 	/* Loading/Error/Empty overlays. --color-overlay tracks --color-bg-primary per theme, so the
