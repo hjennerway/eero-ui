@@ -258,13 +258,41 @@ def normalize_storage(table: Table, kind: str) -> list[NASStorage]:
     return result
 
 
+def verified_volume_units(table: Table, legacy: Table, *, modern: bool) -> Table:
+    """Some QTS agents return KiB despite the Counter64 MIB declaring bytes.
+
+    Only apply a multiplier when the same volume's unit-labelled legacy size
+    confirms it. Legacy values are rounded, so allow a small rounding margin.
+    Disk, pool and RAID capacity counters are unaffected.
+    """
+    corrected = dict(table)
+    legacy_rows = rows(legacy)
+    total_column, free_column = (3, 4) if modern else (4, 5)
+    for index, row in rows(table).items():
+        reference = legacy_rows.get(index, {})
+        labelled_total = text_value(reference.get(4)) or ""
+        if not re.search(r"[KMGTPE]i?B$", labelled_total, re.I):
+            continue
+        numeric_total = integer(row.get(total_column))
+        legacy_total = capacity(labelled_total)
+        if not numeric_total or not legacy_total:
+            continue
+        if abs(numeric_total * 1024 - legacy_total) > legacy_total * 0.02:
+            continue
+        corrected[(total_column, index)] = numeric_total * 1024
+        numeric_free = integer(row.get(free_column))
+        if numeric_free is not None:
+            corrected[(free_column, index)] = numeric_free * 1024
+    return corrected
+
+
 async def poll_nas(config: NASConfig) -> NASSnapshot:
     snapshot = NASSnapshot(id=config.id, name=config.name, host=str(config.host))
     engine = SnmpEngine()
     try:
-        async with asyncio.timeout(15):
+        async with asyncio.timeout(25):
             target = await UdpTransportTarget.create(
-                (str(config.host), config.port), timeout=0.8, retries=0
+                (str(config.host), config.port), timeout=3, retries=0
             )
             auth = CommunityData(config.community.get_secret_value(), mpModel=1)
             context = ContextData()
@@ -323,9 +351,18 @@ async def poll_nas(config: NASConfig) -> NASSnapshot:
             snapshot.disks = normalize_disks(disks, modern=modern)
             volumes = await walk("volumes")
             if volumes:
+                volumes = verified_volume_units(
+                    volumes, await walk("volumes_legacy"), modern=True
+                )
                 snapshot.volumes = normalize_storage(volumes, "volume")
             else:
-                volumes = await walk("volumes_ex") or await walk("volumes_legacy")
+                volumes = await walk("volumes_ex")
+                legacy = await walk("volumes_legacy")
+                volumes = (
+                    verified_volume_units(volumes, legacy, modern=False)
+                    if volumes
+                    else legacy
+                )
                 snapshot.volumes = normalize_storage(volumes, "system_volume")
             snapshot.pools = normalize_storage(await walk("pools"), "pool")
             snapshot.raids = normalize_storage(await walk("raids"), "raid")

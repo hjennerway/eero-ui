@@ -73,11 +73,15 @@
 		return value ? new Date(value).toLocaleString() : 'No current reading';
 	}
 
-	function storageGroups(nas: NASSnapshot): { title: string; items: NASStorage[] }[] {
+	function storageGroups(nas: NASSnapshot): {
+		title: string;
+		items: NASStorage[];
+		allocated: boolean;
+	}[] {
 		return [
-			{ title: 'Volumes', items: nas.volumes },
-			{ title: 'Storage pools', items: nas.pools },
-			{ title: 'RAID groups', items: nas.raids }
+			{ title: 'Volumes', items: nas.volumes, allocated: false },
+			{ title: 'Storage pools', items: nas.pools, allocated: true },
+			{ title: 'RAID groups', items: nas.raids, allocated: true }
 		];
 	}
 </script>
@@ -191,6 +195,10 @@
 				{#each storageGroups(nas) as group}
 					{#if group.items.length}
 						<Card title={group.title}>
+							{#if group.allocated}<p class="text-muted">
+									Allocation includes space assigned to volumes and storage pools. See Volumes for
+									file usage.
+								</p>{/if}
 							<div class="storage-grid">
 								{#each group.items as storage (storage.id)}
 									<article class="storage">
@@ -202,20 +210,20 @@
 										{#if storage.used_percent !== null}<progress
 												max="100"
 												value={storage.used_percent}
-												aria-label={`${storage.name} used capacity`}
+												aria-label={`${storage.name} ${group.allocated ? 'allocated' : 'used'} capacity`}
 											></progress>{/if}
 										<p class="usage">
 											{storage.used_percent === null
 												? 'Usage unavailable'
-												: `${storage.used_percent.toFixed(1)}% used`}
+												: `${storage.used_percent.toFixed(1)}% ${group.allocated ? 'allocated' : 'used'}`}
 										</p>
 										<dl>
 											<div>
-												<dt>Used</dt>
+												<dt>{group.allocated ? 'Allocated' : 'Used'}</dt>
 												<dd>{formatBytes(storage.used_bytes)}</dd>
 											</div>
 											<div>
-												<dt>Free</dt>
+												<dt>{group.allocated ? 'Unallocated' : 'Free'}</dt>
 												<dd>{formatBytes(storage.free_bytes)}</dd>
 											</div>
 											<div>

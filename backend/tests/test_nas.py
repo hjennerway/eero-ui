@@ -123,6 +123,29 @@ def test_usage_handles_full_empty_missing_and_inconsistent_readings():
     assert raids[0].health == "critical" and raids[0].raid_level == "RAID 5"
 
 
+@pytest.mark.parametrize("modern", [True, False])
+def test_qts_kib_volume_counters_require_confirmation_from_labelled_size(modern):
+    total_column, free_column = (3, 4) if modern else (4, 5)
+    numeric = table(
+        {total_column: 1_638_850_228, free_column: 708_585_056},
+        {total_column: 1024**4, free_column: 0},
+        {total_column: 1024, free_column: 512},
+    )
+    legacy = table({4: "1.53 TB"}, {4: "1.00 TB"}, {4: "2.00 TB"})
+    corrected = nas.verified_volume_units(numeric, legacy, modern=modern)
+    readings = nas.normalize_storage(
+        corrected, "volume" if modern else "system_volume"
+    )
+    assert readings[0].capacity_bytes == 1_638_850_228 * 1024
+    assert readings[0].free_bytes == 708_585_056 * 1024
+    assert readings[0].used_percent == 56.8
+    assert readings[1].capacity_bytes == 1024**4
+    assert readings[1].free_bytes == 0
+    assert readings[2].capacity_bytes == 1024
+    assert numeric[(total_column, 1)] == 1_638_850_228
+    assert nas.verified_volume_units(numeric, {}, modern=modern) == numeric
+
+
 @pytest.mark.parametrize("value", [None, "N/A", "--", "-1", "not known"])
 def test_missing_numbers_are_not_zero(value):
     assert nas.capacity(value) is None
