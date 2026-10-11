@@ -266,11 +266,15 @@ async function fetchWithHandling<T>(path: string, config: RequestConfig = {}): P
 
 export const api = {
 	nas: {
-		list: (networkId?: string) =>
-			fetchWithHandling<import('./types').NASSnapshot[]>(
-				`/nas${networkId ? `?network_id=${encodeURIComponent(networkId)}` : ''}`,
-				{ retries: 0 }
-			)
+		list: (networkId?: string, refresh = false) =>
+			fetchWithHandling<import('./types').NASSnapshot[]>('/nas', {
+				params: {
+					...(networkId ? { network_id: networkId } : {}),
+					...(refresh ? { refresh: true } : {})
+				},
+				retries: 0,
+				timeout: 60000
+			})
 	},
 	mqtt: {
 		get: () => fetchWithHandling<import('./types').MQTTStatus>('/mqtt', { retries: 0 }),

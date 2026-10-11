@@ -3,6 +3,7 @@
 import json
 import os
 import time
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -17,6 +18,7 @@ from app.services.mqtt import (
     load_settings,
     parse_broker_address,
 )
+from app.services.nas import NASSnapshot, NASStorage
 from app.services.victoria import Sample
 
 
@@ -56,6 +58,125 @@ def measurements(network_id="net-1", name="Home"):
 
 def published(client):
     return {call.args[0]: call.args[1] for call in client.publish.call_args_list}
+
+
+def nas_snapshot(**updates):
+    return NASSnapshot(
+        id="qnap",
+        name="My NAS",
+        host="192.168.4.2",
+        status="online",
+        observed_at=datetime.now(UTC).isoformat(),
+        volumes=[
+            NASStorage(
+                id="1",
+                name="Data",
+                status="Ready",
+                health="good",
+                capacity_bytes=1000,
+                used_bytes=1000,
+                free_bytes=0,
+                used_percent=100,
+            )
+        ],
+    ).model_copy(update=updates)
+
+
+def test_nas_volumes_publish_retained_json_and_six_sensors_without_host(
+    service, broker
+):
+    service.publish_nas({"home": [nas_snapshot()]})
+    messages = published(broker)
+    configs = [json.loads(v) for k, v in messages.items() if k.endswith("/config")]
+    assert len(configs) == 6
+    state = next(json.loads(v) for k, v in messages.items() if k.endswith("/state"))
+    assert state["free_bytes"] == 0 and state["used_percent"] == 100
+    assert state["observed_at"] and state["health"] == "good"
+    assert "192.168.4.2" not in json.dumps(messages)
+    assert all(c["expire_after"] == 900 for c in configs)
+    assert messages[f"{service.base_topic}/availability"] == "online"
+    assert all(
+        call.kwargs == {"qos": 1, "retain": True}
+        for call in broker.publish.call_args_list
+    )
+
+
+def test_nas_identities_do_not_collide_and_reconnect_expires_old_readings(
+    service, broker
+):
+    snapshot = nas_snapshot()
+    service.publish_nas({"home": [snapshot], "office": [snapshot]})
+    configs = [
+        json.loads(v) for k, v in published(broker).items() if k.endswith("/config")
+    ]
+    assert len({c["unique_id"] for c in configs}) == 12
+    assert len({c["device"]["identifiers"][0] for c in configs}) == 2
+    old = nas_snapshot(
+        observed_at=(datetime.now(UTC) - timedelta(seconds=901)).isoformat()
+    )
+    service.publish_nas({"home": [old], "office": [old]})
+    broker.publish.reset_mock()
+    service._on_connect(broker, None, None, SimpleNamespace(is_failure=False), None)
+    messages = published(broker)
+    assert len([k for k in messages if k.endswith("/config")]) == 12
+    assert all(
+        v == "offline" for k, v in messages.items() if k.endswith("/availability")
+    )
+    assert all(
+        json.loads(v)["used_bytes"] is None
+        for k, v in messages.items()
+        if k.endswith("/state")
+    )
+
+
+def test_nas_unreachable_preserves_entities_as_unavailable_and_removal_cleans_topics(
+    service, broker
+):
+    service.publish_nas({"home": [nas_snapshot()]})
+    broker.publish.reset_mock()
+    service.publish_nas(
+        {"home": [nas_snapshot(status="unreachable", volumes=[], observed_at=None)]}
+    )
+    messages = published(broker)
+    assert all(
+        v == "offline" for k, v in messages.items() if k.endswith("/availability")
+    )
+    assert (
+        next(json.loads(v) for k, v in messages.items() if k.endswith("/state"))[
+            "capacity_bytes"
+        ]
+        is None
+    )
+    broker.publish.reset_mock()
+    service.publish_nas({})
+    removed = published(broker)
+    assert (
+        len([v for k, v in removed.items() if k.endswith("/config") and v == ""]) == 6
+    )
+    assert any(k.endswith("/state") and v == "" for k, v in removed.items())
+
+
+def test_disabled_mqtt_caches_nas_without_publishing(service):
+    service.publish_nas({"home": [nas_snapshot()]})
+    assert service._client is None and service._nas_snapshots
+
+
+async def test_turning_discovery_off_removes_nas_configs(service, broker):
+    service.publish_nas({"home": [nas_snapshot()]})
+    broker.publish.reset_mock()
+    await service.update(
+        MQTTSettingsUpdate(broker_address="broker", home_assistant_discovery=False)
+    )
+    assert (
+        len(
+            [
+                v
+                for k, v in published(broker).items()
+                if k.endswith("/config") and v == ""
+            ]
+        )
+        == 6
+    )
 
 
 @pytest.mark.parametrize(

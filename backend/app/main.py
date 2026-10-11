@@ -53,6 +53,7 @@ from .routes import (
 )
 from .services.collector import MetricsCollector
 from .services.mqtt import MQTTService
+from .services.nas import nas_inventory
 from .services.victoria import victoria_client
 
 
@@ -126,11 +127,23 @@ async def lifespan(app: FastAPI):
     )
     app.state.metrics_collector = collector
     collector_task = asyncio.create_task(collector.run_forever())
+    nas_task = asyncio.create_task(
+        nas_inventory.run_forever(
+            settings.nas_file,
+            app.state.mqtt_service.publish_nas if app.state.mqtt_service else None,
+        )
+    )
 
     try:
         yield
     finally:
         _LOGGER.info("Shutting down Eero Dashboard Backend")
+        nas_task.cancel()
+        try:
+            await nas_task
+        except asyncio.CancelledError:
+            pass
+        await nas_inventory.close()
         collector_task.cancel()
         try:
             await collector_task

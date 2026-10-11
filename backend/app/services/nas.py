@@ -8,8 +8,10 @@ SMART summaries are not individual SMART attributes or self-test results.
 
 import asyncio
 import json
+import logging
 import re
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from ipaddress import IPv4Address, IPv4Network
@@ -29,7 +31,11 @@ from pysnmp.hlapi.v3arch.asyncio import (
 )
 from pysnmp.proto.rfc1905 import EndOfMibView, NoSuchInstance, NoSuchObject
 
+from .qts import QTSConfig, enrich_disks
+
 Health = Literal["good", "warning", "critical", "unknown"]
+REFRESH_SECONDS = 300
+_LOGGER = logging.getLogger(__name__)
 Table = dict[tuple[int, ...], Any]
 _MISSING = (NoSuchObject, NoSuchInstance, EndOfMibView)
 _BASE = "1.3.6.1.4.1.24681"
@@ -53,6 +59,7 @@ class NASConfig(BaseModel):
     host: IPv4Address
     port: int = Field(default=161, ge=1, le=65535)
     community: SecretStr = Field(min_length=1, max_length=128)
+    qts: QTSConfig | None = None
 
     @field_validator("host")
     @classmethod
@@ -76,6 +83,8 @@ class NASDisk(BaseModel):
     health: Health = "unknown"
     temperature_c: float | None = None
     capacity_bytes: int | None = None
+    power_on_days: int | None = None
+    ssd_life_remaining_percent: int | None = None
 
 
 class NASStorage(BaseModel):
@@ -97,6 +106,7 @@ class NASSnapshot(BaseModel):
     status: Literal["online", "unreachable"] = "unreachable"
     model: str | None = None
     observed_at: str | None = None
+    stale: bool = False
     disks: list[NASDisk] = Field(default_factory=list)
     volumes: list[NASStorage] = Field(default_factory=list)
     pools: list[NASStorage] = Field(default_factory=list)
@@ -386,15 +396,17 @@ async def poll_nas(config: NASConfig) -> NASSnapshot:
         )
     finally:
         engine.close_dispatcher()
+    if snapshot.status == "online":
+        await enrich_disks(config, snapshot)
     return snapshot
 
 
 class NASInventory:
     def __init__(self) -> None:
-        self.lock = asyncio.Lock()
         self.cache: dict[str, tuple[float, NASSnapshot]] = {}
+        self.tasks: dict[str, asyncio.Task[NASSnapshot]] = {}
 
-    async def read(self, path: str | None, network_id: str) -> list[NASSnapshot]:
+    async def _configs(self, path: str | None) -> list[NASConfig]:
         if not path:
             return []
         raw = await asyncio.to_thread(Path(path).read_text, encoding="utf-8")
@@ -403,26 +415,97 @@ class NASInventory:
         configs = TypeAdapter(list[NASConfig]).validate_python(json.loads(raw))
         if len(configs) > 16 or len({c.id for c in configs}) != len(configs):
             raise ValueError("Use unique IDs and at most sixteen NAS devices")
-        selected = [c for c in configs if c.network_id == network_id]
-        if len(selected) > 4:
+        if any(
+            sum(c.network_id == n for c in configs) > 4
+            for n in {c.network_id for c in configs}
+        ):
             raise ValueError("At most four NAS devices can be polled per network")
-        async with self.lock:
-            keys = {
-                c.id: c.model_dump_json() + c.community.get_secret_value()
-                for c in configs
-            }
-            self.cache = {k: v for k, v in self.cache.items() if k in keys.values()}
+        keys = {self._key(c) for c in configs}
+        self.cache = {k: v for k, v in self.cache.items() if k in keys}
+        # Let existing callers finish polls of a previous configuration. Cancelling
+        # these here would also abort a background refresh sharing the same task.
+        return configs
 
-            async def read_one(config: NASConfig) -> NASSnapshot:
-                key = keys[config.id]
-                cached = self.cache.get(key)
-                if cached and time.monotonic() - cached[0] < 30:
-                    return cached[1]
-                result = await poll_nas(config)
-                self.cache[key] = (time.monotonic(), result)
-                return result
+    @staticmethod
+    def _key(config: NASConfig) -> str:
+        return (
+            config.model_dump_json()
+            + config.community.get_secret_value()
+            + (config.qts.password.get_secret_value() if config.qts else "")
+        )
 
-            return list(await asyncio.gather(*(read_one(c) for c in selected)))
+    async def _poll(self, config: NASConfig, key: str) -> NASSnapshot:
+        try:
+            result = await poll_nas(config)
+            self.cache[key] = (time.monotonic(), result)
+            return result
+        finally:
+            if self.tasks.get(key) is asyncio.current_task():
+                self.tasks.pop(key, None)
+
+    async def _read_one(
+        self, config: NASConfig, *, refresh: bool = False, wait: bool = False
+    ) -> NASSnapshot:
+        key = self._key(config)
+        cached = self.cache.get(key)
+        if not refresh and cached and time.monotonic() - cached[0] < REFRESH_SECONDS:
+            return cached[1]
+        task = self.tasks.get(key)
+        if task is None:
+            task = asyncio.create_task(self._poll(config, key))
+            self.tasks[key] = task
+        if cached and not refresh and not wait:
+            return cached[1].model_copy(update={"stale": True})
+        # A disconnected browser must not cancel the shared background poll.
+        return await asyncio.shield(task)
+
+    async def read(
+        self, path: str | None, network_id: str, *, refresh: bool = False
+    ) -> list[NASSnapshot]:
+        configs = await self._configs(path)
+        return list(
+            await asyncio.gather(
+                *(
+                    self._read_one(c, refresh=refresh)
+                    for c in configs
+                    if c.network_id == network_id
+                )
+            )
+        )
+
+    async def refresh_all(self, path: str | None) -> dict[str, list[NASSnapshot]]:
+        configs = await self._configs(path)
+        snapshots = await asyncio.gather(
+            *(self._read_one(c, wait=True) for c in configs)
+        )
+        networks: dict[str, list[NASSnapshot]] = {}
+        for config, snapshot in zip(configs, snapshots):
+            networks.setdefault(config.network_id, []).append(snapshot)
+        return networks
+
+    async def run_forever(
+        self,
+        path: str | None,
+        publish: Callable[[dict[str, list[NASSnapshot]]], None] | None = None,
+    ) -> None:
+        while True:
+            try:
+                snapshots = await self.refresh_all(path)
+                if publish:
+                    publish(snapshots)
+            except (OSError, ValueError):
+                _LOGGER.warning("NAS configuration could not be read")
+                if publish:
+                    publish({})
+            await asyncio.sleep(REFRESH_SECONDS)
+
+    async def close(self) -> None:
+        tasks = list(self.tasks.values())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        self.tasks.clear()
+        self.cache.clear()
 
 
 nas_inventory = NASInventory()

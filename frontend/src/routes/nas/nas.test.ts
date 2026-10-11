@@ -5,6 +5,7 @@ import { selectedNetwork } from '$stores';
 import { api } from '$api/client';
 import type { NASSnapshot } from '$api/types';
 import NASPage from './+page.svelte';
+import { clearNASCache, NAS_REFRESH_MS } from '$stores/nasCache';
 
 vi.mock('$stores', async () => {
 	const { writable } = await import('svelte/store');
@@ -33,7 +34,9 @@ const snapshot: NASSnapshot = {
 			smart_status: 'Warning',
 			health: 'warning',
 			temperature_c: 37,
-			capacity_bytes: 4_000_000_000_000
+			capacity_bytes: 4_000_000_000_000,
+			power_on_days: 1234,
+			ssd_life_remaining_percent: 98
 		},
 		{
 			id: '2',
@@ -45,7 +48,9 @@ const snapshot: NASSnapshot = {
 			smart_status: null,
 			health: 'unknown',
 			temperature_c: null,
-			capacity_bytes: null
+			capacity_bytes: null,
+			power_on_days: null,
+			ssd_life_remaining_percent: null
 		}
 	],
 	volumes: [
@@ -63,10 +68,14 @@ const snapshot: NASSnapshot = {
 	]
 };
 
-beforeEach(() => network.set({ id: 'network-123' }));
+beforeEach(() => {
+	clearNASCache();
+	network.set({ id: 'network-123' });
+});
 afterEach(() => {
 	cleanup();
 	vi.restoreAllMocks();
+	vi.useRealTimers();
 	network.set(null);
 });
 
@@ -75,7 +84,7 @@ describe('NAS status', () => {
 		const list = vi.spyOn(api.nas, 'list').mockResolvedValue([snapshot]);
 		render(NASPage);
 		await screen.findByText('Disk 1');
-		expect(list).toHaveBeenCalledWith('network-123');
+		expect(list).toHaveBeenCalledWith('network-123', false);
 		expect(screen.getByText('1 Warning')).toBeInTheDocument();
 		expect(screen.getByText('1 Unknown')).toBeInTheDocument();
 		expect(screen.getByText('0 Healthy')).toBeInTheDocument();
@@ -83,6 +92,9 @@ describe('NAS status', () => {
 		expect(screen.getByText('100.0% used')).toBeInTheDocument();
 		expect(screen.getByLabelText('Data used capacity')).toHaveAttribute('value', '100');
 		expect(screen.getByText('0 B')).toBeInTheDocument();
+		expect(screen.getByText('1,234 days')).toBeInTheDocument();
+		expect(screen.getByText('98%')).toBeInTheDocument();
+		expect(screen.getAllByText('Unavailable')).toHaveLength(2);
 	});
 
 	it('removes previous health when a refresh reports an unreachable NAS', async () => {
@@ -108,7 +120,7 @@ describe('NAS status', () => {
 		expect(screen.getByText('No current reading')).toBeInTheDocument();
 	});
 
-	it('clears old readings and permits retry after an API error', async () => {
+	it('keeps cached readings labelled stale and permits retry after an API error', async () => {
 		vi.spyOn(api.nas, 'list')
 			.mockResolvedValueOnce([snapshot])
 			.mockRejectedValueOnce(new Error('NAS configuration unavailable.'))
@@ -117,7 +129,8 @@ describe('NAS status', () => {
 		await screen.findByText('Disk 1');
 		await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 		await screen.findByRole('alert');
-		expect(screen.queryByText('Disk 1')).not.toBeInTheDocument();
+		expect(screen.getByText('Disk 1')).toBeInTheDocument();
+		expect(screen.getByText('Cached reading — awaiting refresh')).toBeInTheDocument();
 		await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 		await screen.findByText('Disk 1');
 		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
@@ -133,12 +146,59 @@ describe('NAS status', () => {
 			.mockReturnValueOnce(oldRequest)
 			.mockResolvedValueOnce([]);
 		render(NASPage);
-		await waitFor(() => expect(list).toHaveBeenCalledWith('network-123'));
+		await waitFor(() => expect(list).toHaveBeenCalledWith('network-123', false));
 		network.set({ id: 'network-456' });
 		await screen.findByText('Connect your QNAP');
 		resolveOld([snapshot]);
-		await waitFor(() => expect(list).toHaveBeenCalledWith('network-456'));
+		await waitFor(() => expect(list).toHaveBeenCalledWith('network-456', false));
 		expect(screen.queryByText('Disk 1')).not.toBeInTheDocument();
 		expect(screen.getByText('network-456')).toBeInTheDocument();
+	});
+
+	it('shows cached data immediately when returning to the page during a delayed refresh', async () => {
+		const list = vi.spyOn(api.nas, 'list').mockResolvedValueOnce([snapshot]);
+		const view = render(NASPage);
+		await screen.findByText('Disk 1');
+		view.unmount();
+		list.mockImplementation(() => new Promise(() => {}));
+		render(NASPage);
+		await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+		expect(screen.getByText('Disk 1')).toBeInTheDocument();
+		expect(screen.getByText('Reading NAS status…')).toBeInTheDocument();
+		network.set({ id: 'network-456' });
+		await waitFor(() => expect(list).toHaveBeenCalledWith('network-456', false));
+		expect(screen.queryByText('Disk 1')).not.toBeInTheDocument();
+	});
+
+	it('refreshes every five minutes and forces a new reading for manual refresh', async () => {
+		vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+		const list = vi.spyOn(api.nas, 'list').mockResolvedValue([snapshot]);
+		render(NASPage);
+		await screen.findByText('Disk 1');
+		await vi.advanceTimersByTimeAsync(NAS_REFRESH_MS - 1);
+		expect(list).toHaveBeenCalledTimes(1);
+		await vi.advanceTimersByTimeAsync(1);
+		await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(screen.getByRole('button', { name: 'Refresh' })).toBeEnabled());
+		await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+		expect(list).toHaveBeenLastCalledWith('network-123', true);
+	});
+
+	it('accepts zero days and zero remaining life as real readings', async () => {
+		vi.spyOn(api.nas, 'list').mockResolvedValue([
+			{
+				...snapshot,
+				disks: [
+					{
+						...snapshot.disks[0],
+						power_on_days: 0,
+						ssd_life_remaining_percent: 0
+					}
+				]
+			}
+		]);
+		render(NASPage);
+		await screen.findByText('0 days');
+		expect(screen.getByText('0%')).toBeInTheDocument();
 	});
 });

@@ -1,5 +1,6 @@
 """QNAP health semantics, unavailable readings and credential boundaries."""
 
+import asyncio
 import json
 from unittest.mock import AsyncMock
 
@@ -133,9 +134,7 @@ def test_qts_kib_volume_counters_require_confirmation_from_labelled_size(modern)
     )
     legacy = table({4: "1.53 TB"}, {4: "1.00 TB"}, {4: "2.00 TB"})
     corrected = nas.verified_volume_units(numeric, legacy, modern=modern)
-    readings = nas.normalize_storage(
-        corrected, "volume" if modern else "system_volume"
-    )
+    readings = nas.normalize_storage(corrected, "volume" if modern else "system_volume")
     assert readings[0].capacity_bytes == 1_638_850_228 * 1024
     assert readings[0].free_bytes == 708_585_056 * 1024
     assert readings[0].used_percent == 56.8
@@ -262,7 +261,13 @@ async def test_inventory_is_scoped_and_replaces_old_health_on_failure(
     assert (await inventory.read(str(path), "network-123"))[0].disks
     assert poll.await_count == 1
     assert await inventory.read(str(path), "missing") == []
-    now[0] = 31
+    now[0] = 299
+    assert (await inventory.read(str(path), "network-123"))[0].disks
+    assert poll.await_count == 1
+    now[0] = 301
+    stale = (await inventory.read(str(path), "network-123"))[0]
+    assert stale.stale and stale.disks
+    await asyncio.gather(*inventory.tasks.values())
     assert (await inventory.read(str(path), "network-123"))[0].disks == []
     path.write_text(json.dumps([config(community="new-community")]))
     await inventory.read(str(path), "network-123")
@@ -304,3 +309,84 @@ async def test_api_only_polls_requested_network(auth_client, tmp_path, monkeypat
     assert [n["id"] for n in response.json()] == ["other"]
     assert "community" not in response.text
     assert mock.await_count == 1
+
+
+async def test_refresh_deduplicates_requests_and_close_cancels_pending_poll(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "nas.json"
+    path.write_text(json.dumps([config()]))
+    started, finish = asyncio.Event(), asyncio.Event()
+
+    async def poll(config):
+        started.set()
+        await finish.wait()
+        return NASSnapshot(id=config.id, name=config.name, host=str(config.host))
+
+    mock = AsyncMock(side_effect=poll)
+    monkeypatch.setattr(nas, "poll_nas", mock)
+    inventory = NASInventory()
+    first = asyncio.create_task(inventory.refresh_all(str(path)))
+    await started.wait()
+    second = asyncio.create_task(inventory.read(str(path), "network-123", refresh=True))
+    await asyncio.sleep(0.05)
+    assert mock.await_count == 1
+    finish.set()
+    await asyncio.gather(first, second)
+    finish.clear()
+    started.clear()
+    pending = asyncio.create_task(
+        inventory.read(str(path), "network-123", refresh=True)
+    )
+    await started.wait()
+    await inventory.close()
+    with pytest.raises(asyncio.CancelledError):
+        await pending
+    assert not inventory.tasks and not inventory.cache
+
+
+async def test_background_polling_publishes_all_networks_without_page_visit(
+    tmp_path, monkeypatch
+):
+    path = tmp_path / "nas.json"
+    path.write_text(json.dumps([config(), config(id="other", network_id="other")]))
+    monkeypatch.setattr(
+        nas,
+        "poll_nas",
+        AsyncMock(
+            side_effect=lambda c: NASSnapshot(id=c.id, name=c.name, host=str(c.host))
+        ),
+    )
+    published = []
+    ready = asyncio.Event()
+
+    def publish(networks):
+        published.append(networks)
+        ready.set()
+
+    inventory = NASInventory()
+    task = asyncio.create_task(inventory.run_forever(str(path), publish))
+    await asyncio.wait_for(ready.wait(), 2)
+    assert set(published[0]) == {"network-123", "other"}
+    assert len(inventory.cache) == 2
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await inventory.close()
+
+
+async def test_manual_api_refresh_bypasses_five_minute_cache(
+    auth_client, tmp_path, monkeypatch
+):
+    path = tmp_path / "nas.json"
+    path.write_text(json.dumps([config()]))
+    monkeypatch.setattr(settings, "nas_file", str(path))
+    inventory = NASInventory()
+    monkeypatch.setattr("app.routes.nas.nas_inventory", inventory)
+    poll = AsyncMock(
+        side_effect=lambda c: NASSnapshot(id=c.id, name=c.name, host=str(c.host))
+    )
+    monkeypatch.setattr(nas, "poll_nas", poll)
+    for url in ("/api/nas", "/api/nas", "/api/nas?refresh=true"):
+        assert (await auth_client.get(url)).status_code == 200
+    assert poll.await_count == 2

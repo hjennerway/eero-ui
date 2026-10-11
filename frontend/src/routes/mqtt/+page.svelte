@@ -232,7 +232,9 @@
 				<li><span>Latest speed test upload</span><span class="text-muted">Mbps</span></li>
 			</ul>
 			<p class="text-muted">
-				Speed sensors use the latest recorded test. No new speed tests are started.
+				Speed sensors use the latest recorded test. No new speed tests are started. Configured NAS
+				devices also publish volume capacity, usage, status and health every 5 minutes, with six
+				sensors per volume when auto discovery is enabled.
 			</p>
 		</Card>
 	{/if}

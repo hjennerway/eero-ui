@@ -113,7 +113,27 @@ volumes:
 
 The server must reach the NAS's UDP port; the QTS web/SSH ports are separate. There are no SNMP SET operations, disk tests, storage changes or network scans. Credentials remain server-side. Configurations support at most sixteen NAS devices total and four per network, with unique IDs and private LAN IPv4 addresses. Changes to the JSON file take effect on the next request.
 
-The NAS page refreshes every minute while open; readings are cached for thirty seconds and each poll has a fifteen-second deadline. Failed polls replace old readings with **Unreachable**. Missing SMART/status data remains **Unknown**, even when the NAS responds. Capacity usage is calculated from reported total/free bytes; inconsistent or missing readings are unavailable. Volume usage, pool allocation and RAID capacity describe different storage layers and should not be added together. Check detailed SMART information in QTS under **Storage & Snapshots → Disks/VJBOD → Health**.
+The server polls configured NAS devices at startup and every five minutes, even when the NAS page is closed. The page also refreshes every five minutes and keeps readings in memory per network, so returning to it displays the cached data immediately. A full browser reload uses the server cache; the first poll after a server restart can still take time. Expired cached readings are labelled while a background refresh completes. **Refresh** requests a new poll immediately. Failed polls replace old readings with **Unreachable**; a page request error keeps the last readings visibly marked as cached. Missing SMART/status data remains **Unknown**, even when the NAS responds. Capacity usage is calculated from reported total/free bytes; inconsistent or missing readings are unavailable. Volume usage, pool allocation and RAID capacity describe different storage layers and should not be added together.
+
+### Optional disk age and SSD life
+
+QNAP's NAS-MIB does not expose disk age or estimated SSD life remaining. To include them, add a `qts` object to the NAS entry in your private configuration; see `docs/nas-qts.example.json`:
+
+```json
+"qts": {
+  "username": "YOUR_QTS_MONITORING_USER",
+  "password": "YOUR_QTS_PASSWORD",
+  "port": 443,
+  "https": true,
+  "verify_tls": true
+}
+```
+
+The connection uses the same NAS IP as SNMP. Set the QTS web port separately from the SNMP UDP port. HTTPS and certificate verification are enabled by default. For a NAS using a self-signed certificate, either trust its certificate in the server environment or explicitly set `verify_tls` to `false`. An HTTP-only trusted LAN installation can set `https` to `false` and its web port (usually 8080); HTTP transmits login credentials without transport encryption.
+
+The QTS account needs permission to read Storage & Snapshots disk health; some firmware requires membership in the administrators group. Interactive two-step login is not supported. Credentials and session IDs remain on the server and are never included in API/MQTT responses. The integration logs in, reads the disk inventory and health summaries, then logs out; it does not initiate SMART tests or alter disks. QTS reads have their own 25-second overall deadline, in addition to the SNMP poll.
+
+**Age (powered on)** is the number of complete days derived from QTS `power_on_hours`, not calendar age or NAS uptime. **SSD life remaining** is QTS's reported `SSD_life_percentage`, only when the disk is an SSD and firmware reports support. Zero is a valid reading. Missing/unsupported values show **Unavailable**. Disks are matched by physical enclosure and bay, never SNMP row order. A QTS failure leaves SNMP health and storage readings available with a warning. These QTS endpoints are firmware-dependent; field names were checked against the NAS's Storage Manager JavaScript, but an authenticated read is needed to verify a particular installation.
 
 ## MQTT and Home Assistant
 
@@ -122,6 +142,10 @@ Open **MQTT** in the dashboard sidebar, enable MQTT, and enter your broker addre
 Enable **Home Assistant auto discovery** and configure Home Assistant's MQTT integration to use the same broker. The default discovery prefix is `homeassistant`; change it only if your Home Assistant integration uses another prefix. [Home Assistant's MQTT documentation](https://www.home-assistant.io/integrations/mqtt/) describes the integration and discovery settings.
 
 Each eero network appears as one device with four sensors: **Wired clients**, **Wireless clients**, **Latest speed test download**, and **Latest speed test upload**. Client counts include only connected devices of the corresponding connection type; unclassified devices are not guessed. Speeds are measured in Mbps and use existing test results, without running new tests. Data is published on the existing background collection interval (60 seconds by default).
+
+Configured QNAP devices also publish volume information every five minutes when MQTT is enabled, with no browser required. Each volume has a retained JSON state at `eero_ui/<installation-id>/<network-key>/nas/<nas-key>/volumes/<volume-key>/state`. The network, NAS and volume keys are stable hashes of their configured/reported IDs. Payloads contain volume ID/name, status, health, RAID level when reported, total/free/used bytes, percentage used, and the observation timestamp. NAS addresses, login credentials and disk serial numbers are excluded. Pools and RAID groups are not mixed into volume usage.
+
+With auto discovery enabled, each NAS appears as a QNAP device with six sensors per volume: total capacity, used space, free space, used percentage, status and health. Failed NAS polls mark its sensors unavailable and publish unknown values. Broker disconnects also make them unavailable; readings expire after fifteen minutes without a successful observation. Reconnects and Home Assistant restarts reannounce discovery. Removed volumes/devices have their retained state and discovery topics cleared. SNMP-only NAS configurations support these MQTT volume sensors; QTS credentials are needed only for disk lifetime readings.
 
 Settings are applied without restarting the dashboard. A blank password field preserves the saved password; **Remove saved password** clears it. Credentials are stored server-side in `mqtt.json` beside the eero session file (inside `/data` with the standard Docker setup), with owner-only permissions on POSIX systems. `EERO_DASHBOARD_MQTT_FILE` optionally overrides that path. The settings API returns only whether a password is saved.
 

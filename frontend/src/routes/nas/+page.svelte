@@ -3,6 +3,7 @@
 	import { api } from '$api/client';
 	import type { NASHealth, NASSnapshot, NASStorage } from '$api/types';
 	import { selectedNetwork } from '$stores';
+	import { cachedNAS, cacheNAS, NAS_REFRESH_MS } from '$stores/nasCache';
 	import { formatBytes } from '#lib/utils/format-bytes.js';
 	import Button from '$components/common/Button.svelte';
 	import Card from '$components/common/Card.svelte';
@@ -14,6 +15,7 @@
 	let mounted = $state(false);
 	let revision = 0;
 	let busyNetwork: string | null = null;
+	let pendingRefresh: ReturnType<typeof setTimeout> | undefined;
 	const labels: Record<NASHealth, string> = {
 		good: 'Healthy',
 		warning: 'Warning',
@@ -21,19 +23,29 @@
 		unknown: 'Unknown'
 	};
 
-	async function load(networkId: string, switching = false) {
+	async function load(networkId: string, switching = false, refresh = false) {
 		if (!switching && busyNetwork === networkId) return;
+		clearTimeout(pendingRefresh);
 		const requestRevision = ++revision;
 		busyNetwork = networkId;
 		loading = true;
 		error = '';
-		if (switching) snapshots = [];
+		if (switching) snapshots = cachedNAS(networkId);
 		try {
-			const result = await api.nas.list(networkId);
-			if (mounted && requestRevision === revision) snapshots = result;
+			const result = await api.nas.list(networkId, refresh);
+			if (mounted && requestRevision === revision) {
+				snapshots = result;
+				cacheNAS(networkId, result);
+				if (result.some((snapshot) => snapshot.stale)) {
+					pendingRefresh = setTimeout(() => {
+						if (mounted && requestRevision === revision) void load(networkId);
+					}, 1000);
+				}
+			}
 		} catch (cause) {
 			if (mounted && requestRevision === revision) {
-				snapshots = [];
+				snapshots = snapshots.map((snapshot) => ({ ...snapshot, stale: true }));
+				cacheNAS(networkId, snapshots);
 				error = cause instanceof Error ? cause.message : 'Could not read NAS data.';
 			}
 		} finally {
@@ -61,11 +73,12 @@
 		mounted = true;
 		const timer = setInterval(() => {
 			if ($selectedNetwork?.id) void load($selectedNetwork.id);
-		}, 60000);
+		}, NAS_REFRESH_MS);
 		return () => {
 			mounted = false;
 			revision++;
 			clearInterval(timer);
+			clearTimeout(pendingRefresh);
 		};
 	});
 
@@ -98,7 +111,7 @@
 			variant="secondary"
 			disabled={loading || !$selectedNetwork}
 			onclick={() => {
-				if ($selectedNetwork?.id) void load($selectedNetwork.id);
+				if ($selectedNetwork?.id) void load($selectedNetwork.id, false, true);
 			}}><Icon name="refresh" size={16} /> Refresh</Button
 		>
 	</header>
@@ -139,7 +152,11 @@
 				</div>
 				<div class="observation">
 					<strong class:unreachable={nas.status === 'unreachable'}
-						>{nas.status === 'online' ? 'Responding' : 'Unreachable'}</strong
+						>{nas.stale
+							? 'Cached reading — awaiting refresh'
+							: nas.status === 'online'
+								? 'Responding'
+								: 'Unreachable'}</strong
 					><span class="text-muted">{observedAt(nas.observed_at)}</span>
 				</div>
 			</div>
@@ -181,6 +198,22 @@
 										<div>
 											<dt>Capacity</dt>
 											<dd>{formatBytes(disk.capacity_bytes)}</dd>
+										</div>
+										<div>
+											<dt>Age (powered on)</dt>
+											<dd>
+												{disk.power_on_days == null
+													? 'Unavailable'
+													: `${disk.power_on_days.toLocaleString()} days`}
+											</dd>
+										</div>
+										<div>
+											<dt>SSD life remaining</dt>
+											<dd>
+												{disk.ssd_life_remaining_percent == null
+													? 'Unavailable'
+													: `${disk.ssd_life_remaining_percent}%`}
+											</dd>
 										</div>
 									</dl>
 								</article>
@@ -241,7 +274,8 @@
 		</section>
 	{/each}
 	<p class="text-muted refresh-help">
-		Readings refresh every minute while this page is open. Missing readings appear as unknown.
+		Readings are cached and refreshed every 5 minutes in the background. Disk age and SSD life
+		require the optional QTS connection. Missing readings appear as unavailable.
 	</p>
 </div>
 

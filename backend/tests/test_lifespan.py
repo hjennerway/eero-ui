@@ -82,7 +82,26 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
     mqtt_service = SimpleNamespace(
         start=lambda: call_order.append("mqtt_started"),
         publish_samples=lambda samples: None,
+        publish_nas=lambda snapshots: None,
         close=close_mqtt,
+    )
+    nas_started = asyncio.Event()
+
+    async def poll_nas(path, publish):
+        assert publish is mqtt_service.publish_nas
+        nas_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            call_order.append("nas_task_cancelled")
+
+    async def close_nas():
+        call_order.append("nas_closed")
+
+    monkeypatch.setattr(
+        main_module,
+        "nas_inventory",
+        SimpleNamespace(run_forever=poll_nas, close=close_nas),
     )
     monkeypatch.setattr(main_module, "MQTTService", lambda *args: mqtt_service)
     monkeypatch.setattr(
@@ -96,9 +115,16 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
     with pytest.raises(RuntimeError, match="lifespan interrupted"):
         async with main_module.lifespan(main_module.app):
             await asyncio.wait_for(collector.started.wait(), timeout=1)
+            await asyncio.wait_for(nas_started.wait(), timeout=1)
             assert main_module.app.state.mqtt_service is mqtt_service
             raise RuntimeError("lifespan interrupted")
-    assert call_order == ["mqtt_started", "collector_task_cancelled", "mqtt_closed"]
+    assert call_order == [
+        "mqtt_started",
+        "nas_task_cancelled",
+        "nas_closed",
+        "collector_task_cancelled",
+        "mqtt_closed",
+    ]
     assert main_module.app.state.mqtt_service is None
 
 

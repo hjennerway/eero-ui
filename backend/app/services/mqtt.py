@@ -8,6 +8,7 @@ import os
 import tempfile
 import threading
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
@@ -16,6 +17,7 @@ from uuid import uuid4
 import paho.mqtt.client as mqtt
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
+from .nas import REFRESH_SECONDS, NASSnapshot
 from .victoria import Sample
 
 _SENSORS = {
@@ -24,6 +26,15 @@ _SENSORS = {
     "download_mbps": ("Latest speed test download", "mdi:download", "Mbps"),
     "upload_mbps": ("Latest speed test upload", "mdi:upload", "Mbps"),
 }
+_VOLUME_SENSORS = {
+    "capacity_bytes": ("Total capacity", "B", "data_size"),
+    "used_bytes": ("Used space", "B", "data_size"),
+    "free_bytes": ("Free space", "B", "data_size"),
+    "used_percent": ("Used capacity", "%", None),
+    "status": ("Status", None, None),
+    "health": ("Health", None, None),
+}
+_NAS_EXPIRY = REFRESH_SECONDS * 3
 
 
 def parse_broker_address(address: str) -> tuple[str, int, bool]:
@@ -132,8 +143,8 @@ def save_settings(path: Path, config: MQTTSettings) -> None:
 class MQTTService:
     """Paho owns its network thread; callbacks and collection share a lock.
 
-    Only aggregate counts and speeds leave the application. Device addresses,
-    names and credentials are never included in MQTT payloads.
+    Publishes aggregate network metrics and configured NAS volume readings.
+    Client addresses and credentials are never included in MQTT payloads.
     """
 
     def __init__(self, path: Path, interval_seconds: int = 60) -> None:
@@ -148,6 +159,8 @@ class MQTTService:
         self._snapshots: dict[str, dict] = {}
         self._snapshot_at = 0.0
         self._announced: dict[str, str] = {}
+        self._nas_snapshots: dict[tuple[str, str], NASSnapshot] = {}
+        self._nas_removed_topics: set[str] = set()
 
     @property
     def base_topic(self) -> str:
@@ -238,6 +251,11 @@ class MQTTService:
                                     qos=1,
                                     retain=True,
                                 )
+                            )
+                    for identity, snapshot in self._nas_snapshots.items():
+                        for topic in self._nas_discovery_topics(identity, snapshot):
+                            messages.append(
+                                client.publish(topic, "", qos=1, retain=True)
                             )
                 messages.append(
                     client.publish(
@@ -353,6 +371,152 @@ class MQTTService:
     def _network_key(self, network_id: str) -> str:
         return hashlib.sha256(network_id.encode()).hexdigest()[:16]
 
+    def _nas_topic(self, identity: tuple[str, str]) -> str:
+        network_id, nas_id = identity
+        return f"{self.base_topic}/{self._network_key(network_id)}/nas/{self._network_key(nas_id)}"
+
+    def _nas_discovery_topic(
+        self, identity: tuple[str, str], volume_id: str, key: str
+    ) -> str:
+        node = "_".join(self._network_key(part) for part in (*identity, volume_id))
+        return f"{self.config.discovery_prefix}/sensor/eero_ui_{self.config.instance_id}_nas_{node}/{key}/config"
+
+    def _nas_discovery_topics(
+        self, identity: tuple[str, str], snapshot: NASSnapshot
+    ) -> list[str]:
+        return [
+            self._nas_discovery_topic(identity, volume.id, key)
+            for volume in snapshot.volumes
+            for key in _VOLUME_SENSORS
+        ]
+
+    def publish_nas(self, networks: dict[str, list[NASSnapshot]]) -> None:
+        """Consume the complete background inventory, without NAS credentials/addresses."""
+        with self._lock:
+            snapshots = {
+                (network_id, nas.id): nas
+                for network_id, devices in networks.items()
+                for nas in devices
+            }
+            for identity, previous in self._nas_snapshots.items():
+                current = snapshots.get(identity)
+                # A failed poll has no volume list. Keep identities to announce unknown
+                # states and offline availability until the next successful poll.
+                if current and current.status != "online":
+                    snapshots[identity] = current.model_copy(
+                        update={"volumes": previous.volumes}
+                    )
+                    continue
+                ids = {v.id for v in current.volumes} if current else set()
+                for volume in previous.volumes:
+                    if volume.id not in ids:
+                        self._nas_removed_topics.add(
+                            f"{self._nas_topic(identity)}/volumes/{self._network_key(volume.id)}/state"
+                        )
+                        self._nas_removed_topics.update(
+                            self._nas_discovery_topic(identity, volume.id, key)
+                            for key in _VOLUME_SENSORS
+                        )
+                if current is None:
+                    self._nas_removed_topics.add(
+                        f"{self._nas_topic(identity)}/availability"
+                    )
+            self._nas_snapshots = snapshots
+            if self.config.enabled and self._client and self._client.is_connected():
+                self._publish_snapshot()
+
+    @staticmethod
+    def _nas_fresh(snapshot: NASSnapshot) -> bool:
+        if snapshot.status != "online" or not snapshot.observed_at or snapshot.stale:
+            return False
+        try:
+            age = (
+                datetime.now(UTC) - datetime.fromisoformat(snapshot.observed_at)
+            ).total_seconds()
+            return 0 <= age < _NAS_EXPIRY
+        except (ValueError, TypeError):
+            return False
+
+    def _publish_nas_snapshot(self) -> bool:
+        client = self._client
+        if client is None:
+            return False
+        for topic in list(self._nas_removed_topics):
+            if (
+                client.publish(topic, "", qos=1, retain=True).rc
+                == mqtt.MQTT_ERR_SUCCESS
+            ):
+                self._nas_removed_topics.discard(topic)
+                self._announced.pop(topic, None)
+        available = False
+        for identity, snapshot in self._nas_snapshots.items():
+            topic = self._nas_topic(identity)
+            fresh = self._nas_fresh(snapshot)
+            available |= fresh
+            client.publish(
+                f"{topic}/availability",
+                "online" if fresh else "offline",
+                qos=1,
+                retain=True,
+            )
+            for volume in snapshot.volumes:
+                state_topic = f"{topic}/volumes/{self._network_key(volume.id)}/state"
+                values = volume.model_dump()
+                if not fresh:
+                    values.update({key: None for key in _VOLUME_SENSORS})
+                values["observed_at"] = snapshot.observed_at
+                client.publish(state_topic, json.dumps(values), qos=1, retain=True)
+                if not self.config.home_assistant_discovery:
+                    continue
+                for key, (name, unit, device_class) in _VOLUME_SENSORS.items():
+                    unique = "_".join(
+                        self._network_key(part) for part in (*identity, volume.id)
+                    )
+                    payload = {
+                        "name": f"{volume.name} {name}",
+                        "unique_id": f"eero_ui_{self.config.instance_id}_nas_{unique}_{key}",
+                        "state_topic": state_topic,
+                        "value_template": "{{ value_json."
+                        + key
+                        + " if value_json."
+                        + key
+                        + " is not none else 'None' }}",
+                        "availability": [
+                            {"topic": f"{self.base_topic}/availability"},
+                            {"topic": f"{topic}/availability"},
+                        ],
+                        "availability_mode": "all",
+                        "expire_after": _NAS_EXPIRY,
+                        "icon": "mdi:harddisk",
+                        "device": {
+                            "identifiers": [
+                                f"eero_ui_{self.config.instance_id}_nas_{self._network_key(identity[0])}_{self._network_key(identity[1])}"
+                            ],
+                            "name": snapshot.name,
+                            "manufacturer": "QNAP",
+                            "model": snapshot.model or "NAS",
+                        },
+                    }
+                    if unit:
+                        payload.update(
+                            unit_of_measurement=unit, state_class="measurement"
+                        )
+                    if device_class:
+                        payload["device_class"] = device_class
+                    discovery_topic = self._nas_discovery_topic(
+                        identity, volume.id, key
+                    )
+                    encoded = json.dumps(payload)
+                    if self._announced.get(discovery_topic) != encoded:
+                        if (
+                            client.publish(
+                                discovery_topic, encoded, qos=1, retain=True
+                            ).rc
+                            == mqtt.MQTT_ERR_SUCCESS
+                        ):
+                            self._announced[discovery_topic] = encoded
+        return available
+
     def _discovery_topic(self, network_id: str, key: str) -> str:
         return f"{self.config.discovery_prefix}/sensor/eero_ui_{self.config.instance_id}_{self._network_key(network_id)}/{key}/config"
 
@@ -408,6 +572,7 @@ class MQTTService:
         available = fresh and any(
             snapshot["values"] for snapshot in self._snapshots.values()
         )
+        available = self._publish_nas_snapshot() or available
         client.publish(
             f"{self.base_topic}/availability",
             "online" if available else "offline",

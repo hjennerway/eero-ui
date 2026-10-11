@@ -31,6 +31,8 @@ export interface NASDisk {
 	health: NASHealth;
 	temperature_c: number | null;
 	capacity_bytes: number | null;
+	power_on_days: number | null;
+	ssd_life_remaining_percent: number | null;
 }
 
 export interface NASStorage {
@@ -52,6 +54,7 @@ export interface NASSnapshot {
 	status: 'online' | 'unreachable';
 	model: string | null;
 	observed_at: string | null;
+	stale?: boolean;
 	disks: NASDisk[];
 	volumes: NASStorage[];
 	pools: NASStorage[];
