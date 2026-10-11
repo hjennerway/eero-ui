@@ -232,9 +232,18 @@
 				<li><span>Latest speed test upload</span><span class="text-muted">Mbps</span></li>
 			</ul>
 			<p class="text-muted">
-				Speed sensors use the latest recorded test. No new speed tests are started. Configured NAS
-				devices also publish volume capacity, usage, status and health every 5 minutes, with six
-				sensors per volume when auto discovery is enabled.
+				Speed sensors use the latest recorded test. No new speed tests are started.
+			</p>
+			<p class="text-muted">
+				Configured NAS devices publish every 5 minutes. Each volume includes total size, available
+				size, used space, percentage used, status and health, with six sensors per volume when auto
+				discovery is enabled.
+			</p>
+			<p class="text-muted">
+				Each disk has seven sensors: health, SMART health, status, temperature, capacity, power-on
+				hours and SSD life remaining. Power-on hours and SSD life require a saved QTS connection;
+				unsupported readings remain unknown. Find these sensors under the NAS device in Home
+				Assistant.
 			</p>
 		</Card>
 	{/if}

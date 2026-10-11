@@ -54,7 +54,7 @@ Writes that have not been verified end-to-end against a live eero network are hi
 
 Topology can also show managed switches, their ports and link speeds using read-only SNMP, LLDP neighbours and MAC learning. Verified with the Netgear GS110TP; see [Network switches](wiki/Configuration.md#network-switches) for setup and inference limits.
 
-The **MQTT** section connects to your broker and supports Home Assistant auto discovery for wired/wireless client counts, the latest download/upload speed test, and QNAP volume capacity and health. See [MQTT setup](wiki/Configuration.md#mqtt-and-home-assistant).
+The **MQTT** section connects to your broker and supports Home Assistant auto discovery for wired/wireless client counts, the latest download/upload speed test, QNAP disk health and power-on hours, and each volume's total size, available space and percentage used. See [MQTT setup](wiki/Configuration.md#mqtt-and-home-assistant).
 
 The **NAS** section reads QNAP disk status, SMART health summaries, temperatures and storage usage using read-only SNMP, with cached readings refreshed every five minutes in the background. Use **QTS connection** on the NAS page to test and save a login for power-on time in years, months, days and hours, plus estimated SSD life remaining. See [QNAP NAS setup](wiki/Configuration.md#qnap-nas-health-and-storage).
 

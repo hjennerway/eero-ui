@@ -18,7 +18,7 @@ from app.services.mqtt import (
     load_settings,
     parse_broker_address,
 )
-from app.services.nas import NASSnapshot, NASStorage
+from app.services.nas import NASDisk, NASSnapshot, NASStorage
 from app.services.victoria import Sample
 
 
@@ -82,6 +82,23 @@ def nas_snapshot(**updates):
     ).model_copy(update=updates)
 
 
+def nas_disk(**updates):
+    return NASDisk(
+        id="1",
+        name="Disk 1",
+        enclosure_id=0,
+        bay=1,
+        model="Drive model",
+        status="Ready",
+        smart_status="GOOD",
+        health="good",
+        temperature_c=35,
+        capacity_bytes=2000,
+        power_on_hours=51448,
+        power_on_days=2143,
+    ).model_copy(update=updates)
+
+
 def test_nas_volumes_publish_retained_json_and_six_sensors_without_host(
     service, broker
 ):
@@ -99,45 +116,157 @@ def test_nas_volumes_publish_retained_json_and_six_sensors_without_host(
         call.kwargs == {"qos": 1, "retain": True}
         for call in broker.publish.call_args_list
     )
+    # Existing volume discovery identities must survive the addition of disk sensors.
+    node = "_".join(service._network_key(part) for part in ("home", "qnap", "1"))
+    prefix = f"eero_ui_{service.config.instance_id}_nas_{node}"
+    assert all(c["unique_id"].startswith(prefix + "_") for c in configs)
+    assert f"homeassistant/sensor/{prefix}/health/config" in messages
+
+
+@pytest.mark.parametrize("hours", [51448, 0, None])
+def test_nas_disks_publish_health_and_exact_power_on_hours(service, broker, hours):
+    disk = nas_disk(power_on_hours=hours, ssd_life_remaining_percent=0)
+    snapshot = nas_snapshot(disks=[disk], volumes=[])
+    service.publish_nas({"home": [snapshot]})
+    messages = published(broker)
+    state_topic = next(k for k in messages if "/disks/" in k)
+    assert json.loads(messages[state_topic]) == {
+        **disk.model_dump(),
+        "observed_at": snapshot.observed_at,
+    }
+    configs = {
+        k.split("/")[-2]: json.loads(v)
+        for k, v in messages.items()
+        if k.endswith("/config")
+    }
+    assert set(configs) == {
+        "health",
+        "smart_status",
+        "status",
+        "power_on_hours",
+        "temperature_c",
+        "capacity_bytes",
+        "ssd_life_remaining_percent",
+    }
+    assert configs["power_on_hours"]["unit_of_measurement"] == "h"
+    assert configs["power_on_hours"]["device_class"] == "duration"
+    assert configs["temperature_c"]["unit_of_measurement"] == "°C"
+    assert configs["temperature_c"]["device_class"] == "temperature"
+    for key, config in configs.items():
+        assert config["state_topic"] == state_topic
+        assert config["value_template"] == (
+            f"{{{{ value_json.{key} if value_json.{key} is not none else 'None' }}}}"
+        )
+        assert config["expire_after"] == 900
+        assert config["availability_mode"] == "all"
+        assert len(config["availability"]) == 2
+    assert "192.168.4.2" not in json.dumps(messages)
+    assert messages[f"{service.base_topic}/availability"] == "online"
+    assert all(
+        call.kwargs == {"qos": 1, "retain": True}
+        for call in broker.publish.call_args_list
+    )
+
+
+def test_all_volumes_publish_total_available_and_used_percentage(service, broker):
+    volumes = [
+        nas_snapshot().volumes[0],
+        NASStorage(
+            id="2",
+            name="Backups",
+            capacity_bytes=8000,
+            free_bytes=6000,
+            used_bytes=2000,
+            used_percent=25,
+        ),
+        NASStorage(id="3", name="Unavailable"),
+    ]
+    service.publish_nas({"home": [nas_snapshot(volumes=volumes)]})
+    messages = published(broker)
+    states = {
+        state["id"]: state
+        for k, v in messages.items()
+        if k.endswith("/state")
+        for state in [json.loads(v)]
+    }
+    assert set(states) == {"1", "2", "3"}
+    for volume in volumes:
+        for key, value in volume.model_dump().items():
+            assert states[volume.id][key] == value
+    configs = [json.loads(v) for k, v in messages.items() if k.endswith("/config")]
+    assert len(configs) == 18
+    for config in configs:
+        key = config["unique_id"].split("_")[-2:]
+        if key[-1] == "bytes":
+            assert config["unit_of_measurement"] == "B"
+            assert config["device_class"] == "data_size"
+        elif key == ["used", "percent"]:
+            assert config["unit_of_measurement"] == "%"
 
 
 def test_nas_identities_do_not_collide_and_reconnect_expires_old_readings(
     service, broker
 ):
-    snapshot = nas_snapshot()
-    service.publish_nas({"home": [snapshot], "office": [snapshot]})
+    snapshot = nas_snapshot(disks=[nas_disk(), nas_disk(id="2", name="Disk 2")])
+    devices = [snapshot, snapshot.model_copy(update={"id": "other-nas"})]
+    service.publish_nas({"home": devices, "office": devices})
     configs = [
         json.loads(v) for k, v in published(broker).items() if k.endswith("/config")
     ]
-    assert len({c["unique_id"] for c in configs}) == 12
-    assert len({c["device"]["identifiers"][0] for c in configs}) == 2
-    old = nas_snapshot(
-        observed_at=(datetime.now(UTC) - timedelta(seconds=901)).isoformat()
-    )
-    service.publish_nas({"home": [old], "office": [old]})
+    assert len({c["unique_id"] for c in configs}) == 80
+    assert len({c["state_topic"] for c in configs}) == 12
+    assert len({c["device"]["identifiers"][0] for c in configs}) == 4
+    old = [
+        device.model_copy(
+            update={
+                "observed_at": (datetime.now(UTC) - timedelta(seconds=901)).isoformat()
+            }
+        )
+        for device in devices
+    ]
+    service.publish_nas({"home": old, "office": old})
     broker.publish.reset_mock()
     service._on_connect(broker, None, None, SimpleNamespace(is_failure=False), None)
     messages = published(broker)
-    assert len([k for k in messages if k.endswith("/config")]) == 12
+    assert len([k for k in messages if k.endswith("/config")]) == 80
     assert all(
         v == "offline" for k, v in messages.items() if k.endswith("/availability")
     )
     assert all(
-        json.loads(v)["used_bytes"] is None
+        json.loads(v)["capacity_bytes"] is None
         for k, v in messages.items()
         if k.endswith("/state")
     )
+    for topic, value in messages.items():
+        if "/disks/" in topic:
+            state = json.loads(value)
+            assert all(
+                state[key] is None
+                for key in (
+                    "health",
+                    "smart_status",
+                    "status",
+                    "power_on_hours",
+                    "power_on_days",
+                    "temperature_c",
+                    "capacity_bytes",
+                    "ssd_life_remaining_percent",
+                )
+            )
 
 
 def test_nas_unreachable_preserves_entities_as_unavailable_and_removal_cleans_topics(
     service, broker
 ):
-    service.publish_nas({"home": [nas_snapshot()]})
+    snapshot = nas_snapshot(disks=[nas_disk()])
+    service.publish_nas({"home": [snapshot]})
     broker.publish.reset_mock()
     service.publish_nas(
         {"home": [nas_snapshot(status="unreachable", volumes=[], observed_at=None)]}
     )
     messages = published(broker)
+    assert len([k for k in messages if k.endswith("/state")]) == 2
+    assert not any(k.endswith("/config") for k in messages)
     assert all(
         v == "offline" for k, v in messages.items() if k.endswith("/availability")
     )
@@ -147,22 +276,73 @@ def test_nas_unreachable_preserves_entities_as_unavailable_and_removal_cleans_to
         ]
         is None
     )
+    service.publish_nas({"home": [snapshot]})
+    recovered = published(broker)
+    assert all(
+        value == "online"
+        for key, value in recovered.items()
+        if key.endswith("/availability")
+    )
+    assert (
+        next(
+            json.loads(value)["power_on_hours"]
+            for key, value in recovered.items()
+            if "/disks/" in key
+        )
+        == 51448
+    )
     broker.publish.reset_mock()
     service.publish_nas({})
     removed = published(broker)
     assert (
-        len([v for k, v in removed.items() if k.endswith("/config") and v == ""]) == 6
+        len([v for k, v in removed.items() if k.endswith("/config") and v == ""]) == 13
     )
-    assert any(k.endswith("/state") and v == "" for k, v in removed.items())
+    assert len([k for k, v in removed.items() if k.endswith("/state") and v == ""]) == 2
+
+
+@pytest.mark.parametrize(("kind", "count"), [("disks", 7), ("volumes", 6)])
+def test_removed_disk_or_volume_cleans_only_its_topics(service, broker, kind, count):
+    snapshot = nas_snapshot(disks=[nas_disk()])
+    service.publish_nas({"home": [snapshot]})
+    broker.publish.reset_mock()
+    service.publish_nas({"home": [snapshot.model_copy(update={kind: []})]})
+    messages = published(broker)
+    removed = [k for k, v in messages.items() if v == ""]
+    assert len([k for k in removed if k.endswith("/config")]) == count
+    assert len([k for k in removed if f"/{kind}/" in k]) == 1
+    assert messages[f"{service.base_topic}/availability"] == "online"
+
+
+def test_disks_and_volumes_publish_without_discovery(service, broker):
+    service.config.home_assistant_discovery = False
+    service.publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
+    messages = published(broker)
+    assert not any(k.endswith("/config") for k in messages)
+    assert len([k for k in messages if k.endswith("/state")]) == 2
+
+
+def test_nas_home_assistant_restart_reannounces_stable_discovery(service, broker):
+    snapshot = nas_snapshot(disks=[nas_disk()])
+    service.publish_nas({"home": [snapshot]})
+    configs = {k: v for k, v in published(broker).items() if k.endswith("/config")}
+    broker.publish.reset_mock()
+    service.publish_nas({"home": [snapshot]})
+    assert not any(k.endswith("/config") for k in published(broker))
+    service._on_message(
+        broker, None, SimpleNamespace(topic="homeassistant/status", payload=b"online")
+    )
+    assert {
+        k: v for k, v in published(broker).items() if k.endswith("/config")
+    } == configs
 
 
 def test_disabled_mqtt_caches_nas_without_publishing(service):
-    service.publish_nas({"home": [nas_snapshot()]})
+    service.publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
     assert service._client is None and service._nas_snapshots
 
 
 async def test_turning_discovery_off_removes_nas_configs(service, broker):
-    service.publish_nas({"home": [nas_snapshot()]})
+    service.publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
     broker.publish.reset_mock()
     await service.update(
         MQTTSettingsUpdate(broker_address="broker", home_assistant_discovery=False)
@@ -175,7 +355,7 @@ async def test_turning_discovery_off_removes_nas_configs(service, broker):
                 if k.endswith("/config") and v == ""
             ]
         )
-        == 6
+        == 13
     )
 
 
@@ -236,7 +416,7 @@ def test_discovery_and_states_count_only_connected_known_clients(service, broker
         assert config["expire_after"] == 180
         assert config["state_class"] == "measurement"
         if "speed test" in config["name"]:
-            assert config["unit_of_measurement"] == "Mbps"
+            assert config["unit_of_measurement"] == "Mbit/s"
             assert config["device_class"] == "data_rate"
     assert all(
         call.kwargs == {"qos": 1, "retain": True}
