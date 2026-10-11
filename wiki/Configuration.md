@@ -117,7 +117,11 @@ The server polls configured NAS devices at startup and every five minutes, even 
 
 ### Optional disk age and SSD life
 
-QNAP's NAS-MIB does not expose disk age or estimated SSD life remaining. To include them, add a `qts` object to the NAS entry in your private configuration; see `docs/nas-qts.example.json`:
+QNAP's NAS-MIB does not expose disk age or estimated SSD life remaining. On the **NAS** page, choose **QTS connection** beside your NAS. Enter the QTS username, password and web port, choose HTTP/HTTPS and certificate verification settings, then use **Test connection** to check the details without saving. **Save connection** stores them on the dashboard server and refreshes the readings. A blank password keeps the saved password; **Remove connection** deletes the QTS login while retaining SNMP monitoring. The saved password is never returned to the browser. The account needs permission to read disk health, and interactive two-step login is not supported.
+
+Settings are saved atomically in the private file configured by `EERO_DASHBOARD_NAS_FILE`, with owner-only permissions on POSIX systems. That file and its parent directory must be writable by the dashboard. A file mounted individually or read-only cannot be replaced atomically: use a writable directory/volume mount (such as `/data/session`) for UI-managed settings. Other NAS entries and SNMP credentials are preserved. No restart is needed.
+
+Alternatively, add a `qts` object to the NAS entry in your private configuration; see `docs/nas-qts.example.json`:
 
 ```json
 "qts": {
@@ -133,7 +137,9 @@ The connection uses the same NAS IP as SNMP. Set the QTS web port separately fro
 
 The QTS account needs permission to read Storage & Snapshots disk health; some firmware requires membership in the administrators group. Interactive two-step login is not supported. Credentials and session IDs remain on the server and are never included in API/MQTT responses. The integration logs in, reads the disk inventory and health summaries, then logs out; it does not initiate SMART tests or alter disks. QTS reads have their own 25-second overall deadline, in addition to the SNMP poll.
 
-**Age (powered on)** is the number of complete days derived from QTS `power_on_hours`, not calendar age or NAS uptime. **SSD life remaining** is QTS's reported `SSD_life_percentage`, only when the disk is an SSD and firmware reports support. Zero is a valid reading. Missing/unsupported values show **Unavailable**. Disks are matched by physical enclosure and bay, never SNMP row order. A QTS failure leaves SNMP health and storage readings available with a warning. These QTS endpoints are firmware-dependent; field names were checked against the NAS's Storage Manager JavaScript, but an authenticated read is needed to verify a particular installation.
+**Power-on time** preserves QTS `power_on_hours` and displays accumulated drive use in years, months, days and hours, not calendar age or NAS uptime. Years and months are approximate: 365 days per year and 30 days per month, with the year's extra days kept in the days component after eleven months. Hover over the reading for the exact total hours. The API also retains `power_on_days` for older clients. **SSD life remaining** is QTS's reported `SSD_life_percentage`, only when the disk is an SSD and firmware reports support. Zero is a valid reading. Missing/unsupported values show **Unavailable**. Without QTS credentials, the page explains that a QTS connection is needed.
+
+Disks are matched by physical enclosure and bay, never SNMP row order. The summary request uses `dev_id` with the inventory ID's colon removed, as QTS's disk-health UI does. Built-in drive summaries may return a decimal bay number even when the inventory uses a hexadecimal `enclosure:bay` ID. A QTS failure leaves SNMP health and storage readings available with a warning. These firmware-dependent requests and lifetime fields were verified against QTS 5.2.9 on a TVS-473.
 
 ## MQTT and Home Assistant
 

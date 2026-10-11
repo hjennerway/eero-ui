@@ -5,14 +5,17 @@
 	import { selectedNetwork } from '$stores';
 	import { cachedNAS, cacheNAS, NAS_REFRESH_MS } from '$stores/nasCache';
 	import { formatBytes } from '#lib/utils/format-bytes.js';
+	import { formatPowerOnTime } from '#lib/utils/format-power-on-time.js';
 	import Button from '$components/common/Button.svelte';
 	import Card from '$components/common/Card.svelte';
 	import Icon from '$components/common/Icon.svelte';
+	import QTSConnectionModal from '$components/nas/QTSConnectionModal.svelte';
 
 	let snapshots: NASSnapshot[] = $state([]);
 	let loading = $state(false);
 	let error = $state('');
 	let mounted = $state(false);
+	let connectionNAS: { nas: NASSnapshot; networkId: string } | null = $state(null);
 	let revision = 0;
 	let busyNetwork: string | null = null;
 	let pendingRefresh: ReturnType<typeof setTimeout> | undefined;
@@ -24,7 +27,7 @@
 	};
 
 	async function load(networkId: string, switching = false, refresh = false) {
-		if (!switching && busyNetwork === networkId) return;
+		if (!switching && !refresh && busyNetwork === networkId) return;
 		clearTimeout(pendingRefresh);
 		const requestRevision = ++revision;
 		busyNetwork = networkId;
@@ -67,6 +70,10 @@
 			loading = false;
 			error = '';
 		}
+	});
+
+	$effect(() => {
+		if (connectionNAS && connectionNAS.networkId !== $selectedNetwork?.id) connectionNAS = null;
 	});
 
 	onMount(() => {
@@ -158,6 +165,12 @@
 								? 'Responding'
 								: 'Unreachable'}</strong
 					><span class="text-muted">{observedAt(nas.observed_at)}</span>
+					<Button
+						variant="secondary"
+						onclick={() => {
+							if ($selectedNetwork?.id) connectionNAS = { nas, networkId: $selectedNetwork.id };
+						}}>QTS connection</Button
+					>
 				</div>
 			</div>
 			{#each nas.warnings as warning}<p class="notice" role="status">{warning}</p>{/each}
@@ -200,11 +213,15 @@
 											<dd>{formatBytes(disk.capacity_bytes)}</dd>
 										</div>
 										<div>
-											<dt>Age (powered on)</dt>
-											<dd>
-												{disk.power_on_days == null
-													? 'Unavailable'
-													: `${disk.power_on_days.toLocaleString()} days`}
+											<dt>Power-on time</dt>
+											<dd
+												title={disk.power_on_hours == null
+													? undefined
+													: `${disk.power_on_hours.toLocaleString()} total hours`}
+											>
+												{disk.power_on_hours === undefined && disk.power_on_days != null
+													? `${disk.power_on_days.toLocaleString()} days (hours unavailable)`
+													: formatPowerOnTime(disk.power_on_hours)}
 											</dd>
 										</div>
 										<div>
@@ -220,6 +237,10 @@
 							{/each}
 						</div>
 					{/if}
+					<p class="smart-help text-muted">
+						Power-on time is accumulated drive use, with approximate 365-day years and 30-day
+						months. Hover over a reading for total hours.
+					</p>
 					<p class="smart-help text-muted">
 						SMART health is the summary reported by QNAP. Detailed attributes and test results are
 						available in QTS under Storage &amp; Snapshots → Disks/VJBOD → Health.
@@ -278,6 +299,25 @@
 		require the optional QTS connection. Missing readings appear as unavailable.
 	</p>
 </div>
+
+{#if connectionNAS}
+	{#key `${connectionNAS.networkId}/${connectionNAS.nas.id}`}
+		<QTSConnectionModal
+			nasId={connectionNAS.nas.id}
+			networkId={connectionNAS.networkId}
+			name={connectionNAS.nas.name}
+			host={connectionNAS.nas.host}
+			onClose={() => {
+				connectionNAS = null;
+			}}
+			onSaved={() => {
+				const networkId = connectionNAS?.networkId;
+				connectionNAS = null;
+				if (networkId && networkId === $selectedNetwork?.id) void load(networkId, false, true);
+			}}
+		/>
+	{/key}
+{/if}
 
 <style>
 	.nas-page,

@@ -83,6 +83,7 @@ class NASDisk(BaseModel):
     health: Health = "unknown"
     temperature_c: float | None = None
     capacity_bytes: int | None = None
+    power_on_hours: int | None = None
     power_on_days: int | None = None
     ssd_life_remaining_percent: int | None = None
 

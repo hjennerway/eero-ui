@@ -1,8 +1,10 @@
 """Optional QTS disk lifetime readings, using the same summary as the QTS UI.
 
-Protocol fields verified against QTS storageManagerV2Store.js: qsmartInfo uses
-disk/qsmart.cgi func=summary, Summary.power_on_hours, SSD_life_support and
-SSD_life_percentage. Disk IDs are hexadecimal enclosure:bay, not SNMP indexes.
+Protocol verified against QTS storageManagerV2Store.js and HddSmartWizard.js:
+disk/qsmart.cgi func=summary takes dev_id (inventory HDNo without the colon).
+Summary reports power_on_hours, SSD_life_support and SSD_life_percentage.
+Inventory IDs are hexadecimal enclosure:bay, not SNMP indexes; built-in disk
+summaries can instead return the bay as a decimal HDNo.
 """
 
 import asyncio
@@ -41,10 +43,21 @@ def disk_address(disk: "NASDisk") -> tuple[int, int] | None:
     return (0, int(match[1])) if match else None
 
 
+def _qts_address(hd_no: str) -> tuple[int, int] | None:
+    hd_no = hd_no.strip()
+    if re.fullmatch(r"[0-9a-fA-F]+:[0-9a-fA-F]+", hd_no):
+        enclosure, bay = hd_no.split(":")
+        return int(enclosure, 16), int(bay, 16)
+    if re.fullmatch(r"\d+", hd_no):
+        return 0, int(hd_no)
+    return None
+
+
 def apply_summary(disk: "NASDisk", summary: ET.Element) -> None:
-    if summary.findtext("Exists") == "0":
+    if summary.findtext("Exists", "").strip().casefold() in {"0", "no"}:
         return
     hours = _number(summary.findtext("power_on_hours"))
+    disk.power_on_hours = hours
     disk.power_on_days = hours // 24 if hours is not None else None
     if (
         summary.findtext("hd_ifssd") == "1"
@@ -77,7 +90,13 @@ async def _request(
 
 async def enrich_disks(config: "NASConfig", snapshot: "NASSnapshot") -> None:
     qts = config.qts
-    if qts is None or not snapshot.disks:
+    if not snapshot.disks:
+        return
+    if qts is None:
+        snapshot.warnings.append(
+            "Power-on time and SSD life need a QTS connection. "
+            "Use QTS connection to add this NAS's login details."
+        )
         return
     try:
         async with asyncio.timeout(25), httpx.AsyncClient(
@@ -106,14 +125,12 @@ async def enrich_disks(config: "NASConfig", snapshot: "NASSnapshot") -> None:
                 )
                 entries: dict[tuple[int, int], str] = {}
                 for entry in inventory.findall(".//Disk_Info/entry"):
-                    hd_no = entry.findtext("HDNo", "")
+                    hd_no = entry.findtext("HDNo", "").strip()
                     if not entry.findtext("Model"):
                         continue
-                    if re.fullmatch(r"[0-9a-fA-F]+:[0-9a-fA-F]+", hd_no):
-                        enc, bay = hd_no.split(":")
-                        entries[(int(enc, 16), int(bay, 16))] = hd_no
-                    elif re.fullmatch(r"\d+", hd_no):
-                        entries[(0, int(hd_no))] = hd_no
+                    address = _qts_address(hd_no)
+                    if address is not None:
+                        entries[address] = hd_no
                 matched = 0
                 for disk in snapshot.disks:
                     hd_no = entries.get(disk_address(disk))
@@ -125,12 +142,14 @@ async def enrich_disks(config: "NASConfig", snapshot: "NASSnapshot") -> None:
                         {
                             "func": "summary",
                             "kick": "1",
-                            "disk": hd_no,
+                            "dev_id": hd_no.replace(":", ""),
                             "sid": sid,
                         },
                     )
                     summary = result.find(".//Summary")
-                    if summary is not None and summary.findtext("HDNo") == hd_no:
+                    if summary is not None and _qts_address(
+                        summary.findtext("HDNo", "")
+                    ) == disk_address(disk):
                         apply_summary(disk, summary)
                         matched += 1
                 if not matched:
@@ -149,6 +168,7 @@ async def enrich_disks(config: "NASConfig", snapshot: "NASSnapshot") -> None:
     except (TimeoutError, httpx.HTTPError, ValueError, ET.ParseError):
         # Do not report partial/old lifetime readings as a successful refresh.
         for disk in snapshot.disks:
+            disk.power_on_hours = None
             disk.power_on_days = None
             disk.ssd_life_remaining_percent = None
         snapshot.warnings.append(

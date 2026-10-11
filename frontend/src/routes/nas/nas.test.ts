@@ -35,7 +35,8 @@ const snapshot: NASSnapshot = {
 			health: 'warning',
 			temperature_c: 37,
 			capacity_bytes: 4_000_000_000_000,
-			power_on_days: 1234,
+			power_on_hours: 51448,
+			power_on_days: 2143,
 			ssd_life_remaining_percent: 98
 		},
 		{
@@ -50,6 +51,7 @@ const snapshot: NASSnapshot = {
 			temperature_c: null,
 			capacity_bytes: null,
 			power_on_days: null,
+			power_on_hours: null,
 			ssd_life_remaining_percent: null
 		}
 	],
@@ -92,7 +94,8 @@ describe('NAS status', () => {
 		expect(screen.getByText('100.0% used')).toBeInTheDocument();
 		expect(screen.getByLabelText('Data used capacity')).toHaveAttribute('value', '100');
 		expect(screen.getByText('0 B')).toBeInTheDocument();
-		expect(screen.getByText('1,234 days')).toBeInTheDocument();
+		expect(screen.getByText('5 years, 10 months, 18 days, 16 hours')).toBeInTheDocument();
+		expect(screen.getByTitle('51,448 total hours')).toBeInTheDocument();
 		expect(screen.getByText('98%')).toBeInTheDocument();
 		expect(screen.getAllByText('Unavailable')).toHaveLength(2);
 	});
@@ -192,13 +195,71 @@ describe('NAS status', () => {
 					{
 						...snapshot.disks[0],
 						power_on_days: 0,
+						power_on_hours: 0,
 						ssd_life_remaining_percent: 0
 					}
 				]
 			}
 		]);
 		render(NASPage);
-		await screen.findByText('0 days');
+		await screen.findByText('0 hours');
 		expect(screen.getByText('0%')).toBeInTheDocument();
+	});
+
+	it('keeps old day-only cached readings without inventing their remaining hours', async () => {
+		vi.spyOn(api.nas, 'list').mockResolvedValue([
+			{
+				...snapshot,
+				disks: [{ ...snapshot.disks[0], power_on_hours: undefined }]
+			}
+		]);
+		render(NASPage);
+		await screen.findByText('2,143 days (hours unavailable)');
+	});
+
+	it('saves a connection for the selected NAS and refreshes its readings', async () => {
+		const list = vi.spyOn(api.nas, 'list').mockResolvedValue([snapshot]);
+		const status = {
+			enabled: true,
+			username: 'monitor',
+			password_set: true,
+			port: 443,
+			https: true,
+			verify_tls: true
+		};
+		vi.spyOn(api.nas, 'getQTS').mockResolvedValue(status);
+		const update = vi.spyOn(api.nas, 'updateQTS').mockResolvedValue(status);
+		render(NASPage);
+		await screen.findByText('Disk 1');
+		await fireEvent.click(screen.getByRole('button', { name: 'QTS connection' }));
+		await screen.findByDisplayValue('monitor');
+		expect(list).toHaveBeenCalledTimes(1);
+		await fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+		await waitFor(() => expect(list).toHaveBeenLastCalledWith('network-123', true));
+		expect(update).toHaveBeenCalledWith(
+			'qnap',
+			'network-123',
+			expect.objectContaining({ password: null })
+		);
+	});
+
+	it('closes connection settings when the selected network changes', async () => {
+		vi.spyOn(api.nas, 'list').mockResolvedValue([snapshot]);
+		vi.spyOn(api.nas, 'getQTS').mockResolvedValue({
+			enabled: false,
+			username: '',
+			password_set: false,
+			port: 443,
+			https: true,
+			verify_tls: true
+		});
+		const update = vi.spyOn(api.nas, 'updateQTS');
+		render(NASPage);
+		await screen.findByText('Disk 1');
+		await fireEvent.click(screen.getByRole('button', { name: 'QTS connection' }));
+		await screen.findByLabelText('QTS password');
+		network.set({ id: 'network-456' });
+		await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+		expect(update).not.toHaveBeenCalled();
 	});
 });

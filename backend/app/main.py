@@ -221,7 +221,7 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=_csrf_guard_middleware)
 async def request_validation_error_handler(
     request: Request, exc: RequestValidationError
 ):
-    if request.url.path == "/api/mqtt":
+    if request.url.path == "/api/mqtt" or request.url.path.startswith("/api/nas/"):
         # FastAPI normally echoes invalid inputs, which can contain secrets.
         return JSONResponse(
             status_code=422,
