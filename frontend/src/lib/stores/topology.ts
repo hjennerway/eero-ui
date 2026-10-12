@@ -188,8 +188,15 @@ function getMeshQuality(bars: number | null | undefined): EdgeQuality {
 	return 'poor';
 }
 
+const QUALITY_COLOR: Record<EdgeQuality, string> = {
+	excellent: 'success',
+	good: 'accent',
+	fair: 'warning',
+	poor: 'danger'
+};
+
 function getQualityColor(quality: EdgeQuality): string {
-	return `var(--color-${{ excellent: 'success', good: 'accent', fair: 'warning', poor: 'danger' }[quality]})`;
+	return `var(--color-${QUALITY_COLOR[quality]})`;
 }
 
 export function transformToTopology(
