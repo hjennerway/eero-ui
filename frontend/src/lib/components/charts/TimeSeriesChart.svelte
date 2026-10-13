@@ -26,6 +26,8 @@
 		borderColor: string;
 		backgroundColor?: string;
 		fill?: boolean;
+		stepped?: boolean;
+		maxGapMs?: number;
 	}
 
 	interface Props {
@@ -80,7 +82,9 @@
 			borderColor: ds.borderColor,
 			backgroundColor: ds.backgroundColor,
 			fill: ds.fill,
-			tension: 0.3,
+			tension: ds.stepped ? 0 : 0.3,
+			stepped: ds.stepped ?? false,
+			spanGaps: ds.maxGapMs ?? false,
 			pointRadius: 2,
 			borderWidth: 2
 		}));

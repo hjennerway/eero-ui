@@ -110,6 +110,57 @@ const emptyVirtualizationConnection = {
 };
 
 export const handlers = [
+	http.get('/api/vpn', () =>
+		HttpResponse.json({
+			host: '192.168.4.10',
+			interface: 'tun0',
+			provider: 'NordVPN',
+			status: 'connected',
+			reachable: true,
+			connected_clients: 3,
+			download_mbps: 12.5,
+			upload_mbps: 2.25,
+			rx_bytes: 1000000,
+			tx_bytes: 500000,
+			collected_at: '2026-10-13T12:00:00Z',
+			last_success_at: '2026-10-13T12:00:00Z',
+			stale: false,
+			error: null,
+			warnings: [],
+			history_error: null,
+			interval_seconds: 30
+		})
+	),
+	http.get('/api/vpn/connection', () =>
+		HttpResponse.json({
+			enabled: true,
+			host: '192.168.4.10',
+			port: 22,
+			username: 'root',
+			interface: 'tun0',
+			password_set: true,
+			host_key: 'SHA256:fixture'
+		})
+	),
+	http.put('/api/vpn/connection', () =>
+		HttpResponse.json({
+			enabled: true,
+			host: '192.168.4.10',
+			port: 22,
+			username: 'root',
+			interface: 'tun0',
+			password_set: true,
+			host_key: 'SHA256:fixture'
+		})
+	),
+	http.get('/api/vpn/history', () =>
+		HttpResponse.json({
+			download_mbps: [],
+			upload_mbps: [],
+			connected_clients: [],
+			connection_status: []
+		})
+	),
 	http.get('/api/networks/:networkId/virtualization', () => HttpResponse.json(emptyVirtualization)),
 	http.get('/api/networks/:networkId/virtualization/connection', () =>
 		HttpResponse.json(emptyVirtualizationConnection)

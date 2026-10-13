@@ -265,6 +265,23 @@ async function fetchWithHandling<T>(path: string, config: RequestConfig = {}): P
 // ============================================
 
 export const api = {
+	vpn: {
+		get: () => fetchWithHandling<import('./types').VPNSnapshot>('/vpn', { retries: 0 }),
+		connection: () =>
+			fetchWithHandling<import('./types').VPNConnection>('/vpn/connection', { retries: 0 }),
+		saveConnection: (connection: import('./types').VPNConnectionUpdate) =>
+			fetchWithHandling<import('./types').VPNConnection>('/vpn/connection', {
+				method: 'PUT',
+				body: connection,
+				retries: 0,
+				timeout: 60000
+			}),
+		history: (range: '1h' | '6h' | '24h' = '1h') =>
+			fetchWithHandling<import('./types').VPNHistory>('/vpn/history', {
+				params: { range },
+				retries: 0
+			})
+	},
 	virtualization: {
 		get: (networkId: string) =>
 			fetchWithHandling<import('./types').VirtualizationSnapshot>(

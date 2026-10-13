@@ -71,6 +71,26 @@ async def _noop_async(*args, **kwargs) -> None:
     return
 
 
+async def test_vpn_collector_stops_before_the_metrics_store_closes(monkeypatch):
+    call_order = []
+    vpn_collector = FakeCollector()
+    vpn_collector.call_order = call_order
+    monkeypatch.setattr(main_module, "VPNService", lambda *args: vpn_collector)
+    monkeypatch.setattr(
+        main_module, "MetricsCollector", lambda *args, **kwargs: FakeCollector()
+    )
+    monkeypatch.setattr(main_module, "shutdown_client", _noop_async)
+
+    async def close_store():
+        call_order.append("store_closed")
+
+    monkeypatch.setattr(main_module.victoria_client, "aclose", close_store)
+    async with main_module.lifespan(main_module.app):
+        await asyncio.wait_for(vpn_collector.started.wait(), timeout=1)
+    assert vpn_collector.cancelled
+    assert call_order == ["collector_task_cancelled", "store_closed"]
+
+
 async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkeypatch):
     call_order = []
     collector = FakeCollector()

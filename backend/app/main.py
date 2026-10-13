@@ -52,12 +52,14 @@ from .routes import (
     profiles,
     switches,
     virtualization,
+    vpn,
 )
 from .services.collector import MetricsCollector
 from .services.mqtt import MQTTService
 from .services.nas import nas_inventory
 from .services.victoria import victoria_client
 from .services.virtualization import VirtualizationService
+from .services.vpn import VPNService
 
 
 def get_eero_client_version() -> str:
@@ -147,10 +149,25 @@ async def lifespan(app: FastAPI):
         )
     )
 
+    app.state.vpn = VPNService(
+        (
+            Path(settings.vpn_file)
+            if settings.vpn_file
+            else Path(settings.cookie_file).parent / "vpn.json"
+        ),
+        victoria_client,
+    )
+    vpn_task = asyncio.create_task(app.state.vpn.run_forever())
+
     try:
         yield
     finally:
         _LOGGER.info("Shutting down Eero Dashboard Backend")
+        vpn_task.cancel()
+        try:
+            await vpn_task
+        except asyncio.CancelledError:
+            pass
         inventory_task.cancel()
         try:
             await inventory_task
@@ -240,7 +257,9 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=_csrf_guard_middleware)
 async def request_validation_error_handler(
     request: Request, exc: RequestValidationError
 ):
-    if request.url.path == "/api/mqtt" or request.url.path.startswith("/api/nas/"):
+    if request.url.path == "/api/mqtt" or request.url.path.startswith(
+        ("/api/nas/", "/api/vpn/")
+    ):
         # FastAPI normally echoes invalid inputs, which can contain secrets.
         return JSONResponse(
             status_code=422,
@@ -502,6 +521,7 @@ app.include_router(switches.router, prefix="/api/switches", tags=["Switches"])
 app.include_router(discovery.router, prefix="/api/discovery", tags=["LAN discovery"])
 app.include_router(mqtt.router, prefix="/api/mqtt", tags=["MQTT"])
 app.include_router(nas.router, prefix="/api/nas", tags=["NAS"])
+app.include_router(vpn.router, prefix="/api/vpn", tags=["VPN"])
 
 
 # Health check

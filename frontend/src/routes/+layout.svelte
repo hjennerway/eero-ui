@@ -176,7 +176,8 @@
 		{ path: '/topology', label: 'Topology', icon: 'topology' },
 		{ path: '/account', label: 'Account', icon: 'person' },
 		{ path: '/mqtt', label: 'MQTT', icon: 'plug' },
-		{ path: '/nas', label: 'NAS', icon: 'server' }
+		{ path: '/nas', label: 'NAS', icon: 'server' },
+		{ path: '/vpn', label: 'VPN', icon: 'lock' }
 	];
 
 	// Dynamic nav items including network link
@@ -191,7 +192,8 @@
 			{ path: '/virtualization', label: 'Virtualization', icon: 'server' as IconName },
 			baseNavItems[5], // Account
 			baseNavItems[6], // MQTT
-			baseNavItems[7] // NAS
+			baseNavItems[7], // NAS
+			baseNavItems[8] // VPN
 		].filter(Boolean) as { path: string; label: string; icon: IconName }[]
 	);
 

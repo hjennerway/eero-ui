@@ -1884,3 +1884,48 @@ export interface RoamingResponse {
 	/** Up to 5, by move count. */
 	top_roamers: RoamingTopRoamer[];
 }
+export interface VPNConnection {
+	enabled: boolean;
+	host: string;
+	port: number;
+	username: string;
+	interface: string;
+	password_set: boolean;
+	host_key: string | null;
+}
+
+export interface VPNConnectionUpdate {
+	enabled: boolean;
+	host: string;
+	port: number;
+	username: string;
+	interface: string;
+	password: string | null;
+}
+
+export interface VPNSnapshot {
+	host: string;
+	interface: string;
+	provider: string;
+	status: 'connected' | 'disconnected' | 'unknown' | 'unreachable' | 'disabled';
+	reachable: boolean;
+	connected_clients: number | null;
+	download_mbps: number | null;
+	upload_mbps: number | null;
+	rx_bytes: number | null;
+	tx_bytes: number | null;
+	collected_at: string | null;
+	last_success_at: string | null;
+	stale: boolean;
+	error: string | null;
+	warnings: string[];
+	history_error: string | null;
+	interval_seconds: number;
+}
+
+export interface VPNHistory {
+	download_mbps: Array<{ x: number; y: number }>;
+	upload_mbps: Array<{ x: number; y: number }>;
+	connected_clients: Array<{ x: number; y: number }>;
+	connection_status: Array<{ x: number; y: number }>;
+}

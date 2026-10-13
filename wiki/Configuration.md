@@ -163,6 +163,22 @@ The QTS account needs permission to read Storage & Snapshots disk health; some f
 
 Disks are matched by physical enclosure and bay, never SNMP row order. The summary request uses `dev_id` with the inventory ID's colon removed, as QTS's disk-health UI does. Built-in drive summaries may return a decimal bay number even when the inventory uses a hexadecimal `enclosure:bay` ID. A QTS failure leaves SNMP health and storage readings available with a warning. These firmware-dependent requests and lifetime fields were verified against QTS 5.2.9 on a TVS-473.
 
+## VPN monitoring
+
+Open **VPN** in the sidebar to view the NordVPN tunnel on OpenWrt at `192.168.4.10`. Collection runs on the dashboard server every **30 seconds**, independently of the eero collector and browser. Each sample is recorded in the existing VictoriaMetrics store and uses its configured retention period. The page refreshes every 30 seconds while visible and offers 1-hour, 6-hour and 24-hour history.
+
+Use **Connection** to enter an SSH username/password, port and tunnel device. Defaults are `root`, port `22`, and `tun0` (OpenVPN). Set the actual WireGuard device name if using WireGuard. **Test and save** validates SSH and the monitoring commands before saving, even if the tunnel is down. Leaving the password blank preserves a saved password; on a new connection it attempts passwordless SSH. Disabling monitoring removes the saved password.
+
+Settings are stored privately in `vpn.json` alongside the eero session, persisted by the existing Docker data volume. Optionally set `EERO_DASHBOARD_VPN_FILE` to an alternate writable path. Passwords stay on the dashboard server and are omitted from API responses and validation errors. The SSH host key is pinned after the first successful read; a changed key stops monitoring. For a verified replacement device, update/remove `host_key` in the private file on the server. The dashboard container needs network access to the OpenWrt SSH port. OpenWrt needs `ip` with JSON/statistics support, `ubus`, `ping`, and readable kernel connection tracking; the integration installs nothing and changes no router settings.
+
+Readings mean:
+
+- **Connected clients**: unique source IPs with replied tracked connections NATed through the tunnel. Router-originated traffic, local SSH connections, unreplied traffic and closing TCP sessions are excluded. Idle devices and forwarded traffic without NAT are not counted. If connection tracking is unavailable or exceeds 20,000 entries, the count is unavailable.
+- **Download/upload**: the change in tunnel interface receive/transmit byte counters, converted to Mbps using OpenWrt's elapsed uptime. The first reading, a reboot, tunnel replacement, counter reset or recovery from an SSH failure starts a new baseline. Zero traffic remains zero; missing readings display a dash.
+- **Connection status**: connected when the tunnel is up, has an address and a ping explicitly bound to that interface reaches `1.1.1.1`; disconnected when the tunnel is missing/down/addressless; unknown when the interface exists but connectivity cannot be confirmed (for example, blocked ICMP); unreachable when SSH fails. Readings older than 90 seconds are marked stale. History status values are `1`, `0` and `-1` for connected, disconnected and unknown/unreachable.
+
+The recorded metrics are `vpn_reachable`, `vpn_connection_status`, `vpn_connected_clients`, `vpn_download_mbps` and `vpn_upload_mbps`, labelled by host and interface. Failed SSH readings record reachability and unknown status, without inventing client or throughput measurements. History-store failures are shown separately from current tunnel status.
+
 ## MQTT and Home Assistant
 
 Open **MQTT** in the dashboard sidebar, enable MQTT, and enter your broker address and optional username/password. Addresses can be a hostname, `192.168.1.10:1883`, `mqtt://broker:1883`, or `mqtts://broker:8883` for TLS with certificate verification. IPv6 addresses use brackets, for example `mqtt://[::1]:1883`. The broker must be reachable from the dashboard container; `localhost` refers to that container.
