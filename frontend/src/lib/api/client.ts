@@ -276,6 +276,13 @@ export const api = {
 			}),
 		connection: () =>
 			fetchWithHandling<import('./types').VPNConnection>('/vpn/connection', { retries: 0 }),
+		tunnels: (connection: import('./types').VPNConnectionUpdate) =>
+			fetchWithHandling<import('./types').VPNTunnel[]>('/vpn/tunnels', {
+				method: 'POST',
+				body: connection,
+				retries: 0,
+				timeout: 60000
+			}),
 		saveConnection: (connection: import('./types').VPNConnectionUpdate) =>
 			fetchWithHandling<import('./types').VPNConnection>('/vpn/connection', {
 				method: 'PUT',

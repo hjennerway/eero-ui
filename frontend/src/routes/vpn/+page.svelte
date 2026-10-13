@@ -1,7 +1,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { api } from '$api/client';
-	import type { VPNConnection, VPNConnectionUpdate, VPNHistory, VPNSnapshot } from '$api/types';
+	import type {
+		VPNConnection,
+		VPNConnectionUpdate,
+		VPNHistory,
+		VPNSnapshot,
+		VPNTunnel
+	} from '$api/types';
 	import Button from '$components/common/Button.svelte';
 	import Card from '$components/common/Card.svelte';
 	import StatusBadge from '$components/common/StatusBadge.svelte';
@@ -30,6 +36,17 @@
 	let controlMode: 'openvpn' | 'network' = $state('openvpn');
 	let controlTarget = $state('');
 	let password = $state('');
+	let tunnels: VPNTunnel[] | null = $state(null);
+	let discovering = $state(false);
+	let tunnelError: string | null = $state(null);
+	let tunnelKey: string | null = $state(null);
+	const connectionKey = $derived(JSON.stringify([host, port, username, password]));
+	const availableTunnels: VPNTunnel[] | null = $derived.by(() =>
+		tunnelKey === connectionKey ? tunnels : null
+	);
+	const matchingTunnels: VPNTunnel[] = $derived.by(
+		() => availableTunnels?.filter((tunnel) => tunnel.control_mode === controlMode) ?? []
+	);
 	let timeRange: '1h' | '6h' | '24h' = $state('1h');
 	let active = false;
 	let historyGeneration = 0;
@@ -90,6 +107,52 @@
 		controlMode = value.control_mode;
 		controlTarget = value.control_target;
 		password = '';
+		tunnels = null;
+		tunnelKey = null;
+	}
+	function connectionUpdate(): VPNConnectionUpdate {
+		return {
+			enabled,
+			host,
+			port,
+			username,
+			interface: tunnelInterface,
+			control_mode: controlMode,
+			control_target: controlTarget.trim(),
+			password: password || null
+		};
+	}
+	function selectOnlyTunnel() {
+		if (matchingTunnels.some((tunnel) => tunnel.name === controlTarget)) return;
+		if (matchingTunnels.length === 1) controlTarget = matchingTunnels[0].name;
+		else if (matchingTunnels.length > 1) controlTarget = '';
+	}
+	function changeTunnelType(event: Event) {
+		controlMode = (event.currentTarget as HTMLSelectElement).value as 'openvpn' | 'network';
+		controlTarget = '';
+		selectOnlyTunnel();
+	}
+	async function findTunnels() {
+		if (discovering || saving || controlling) return;
+		discovering = true;
+		tunnelError = null;
+		const key = connectionKey;
+		try {
+			const result = await api.vpn.tunnels(connectionUpdate());
+			if (!active || !showConnection || key !== connectionKey) return;
+			tunnels = result;
+			tunnelKey = key;
+			if (result.length === 1) controlMode = result[0].control_mode;
+			selectOnlyTunnel();
+		} catch (cause) {
+			if (active && key === connectionKey) {
+				tunnels = null;
+				tunnelKey = null;
+				tunnelError = cause instanceof Error ? cause.message : 'Could not find VPN tunnels.';
+			}
+		} finally {
+			if (active) discovering = false;
+		}
 	}
 	async function loadHistory() {
 		const current = ++historyGeneration;
@@ -135,20 +198,13 @@
 	}
 	async function saveConnection(event: SubmitEvent) {
 		event.preventDefault();
-		if (saving || controlling || refreshing) return;
+		if (saving || controlling || refreshing || discovering) return;
 		saving = true;
 		connectionError = null;
-		const update: VPNConnectionUpdate = {
-			enabled,
-			host,
-			port,
-			username,
-			interface: tunnelInterface,
-			control_mode: controlMode,
-			control_target: controlTarget.trim(),
-			password: password || null
-		};
+		const update = connectionUpdate();
 		password = '';
+		tunnels = null;
+		tunnelKey = null;
 		try {
 			const result = await api.vpn.saveConnection(update);
 			if (!active) return;
@@ -187,7 +243,10 @@
 		void api.vpn
 			.connection()
 			.then((value) => {
-				if (active) fillConnection(value);
+				if (active) {
+					fillConnection(value);
+					if (showConnection) void findTunnels();
+				}
 			})
 			.catch((cause) => {
 				if (active)
@@ -208,6 +267,8 @@
 			clearInterval(timer);
 			document.removeEventListener('visibilitychange', onVisibility);
 			password = '';
+			tunnels = null;
+			tunnelKey = null;
 		};
 	});
 </script>
@@ -238,6 +299,10 @@
 				onclick={() => {
 					showConnection = !showConnection;
 					password = '';
+					tunnels = null;
+					tunnelKey = null;
+					tunnelError = null;
+					if (showConnection && connection) void findTunnels();
 				}}>Connection</Button
 			>
 			<Button
@@ -303,27 +368,70 @@
 						/></label
 					>
 					<label for="vpn-control-mode"
-						>Tunnel type<select id="vpn-control-mode" class="input" bind:value={controlMode}>
+						>Tunnel type<select
+							id="vpn-control-mode"
+							class="input"
+							bind:value={controlMode}
+							onchange={changeTunnelType}
+							disabled={discovering}
+						>
 							<option value="openvpn">OpenVPN service</option>
 							<option value="network">OpenWrt network interface (WireGuard / OpenVPN)</option>
 						</select></label
 					>
 					<label for="vpn-control-target"
-						>Tunnel name<input
-							id="vpn-control-target"
-							class="input"
-							bind:value={controlTarget}
-							maxlength="64"
-							pattern="[a-zA-Z0-9_][a-zA-Z0-9_.-]*"
-							placeholder="Optional, e.g. nordvpn"
-							aria-describedby="vpn-control-help"
-						/></label
+						>Tunnel name
+						{#if availableTunnels !== null}
+							<select
+								id="vpn-control-target"
+								class="input"
+								bind:value={controlTarget}
+								aria-describedby="vpn-control-help"
+								disabled={discovering}
+							>
+								<option value="">Monitoring only</option>
+								{#if controlTarget && !matchingTunnels.some((tunnel) => tunnel.name === controlTarget)}
+									<option value={controlTarget}>{controlTarget} (current selection)</option>
+								{/if}
+								{#each matchingTunnels as tunnel (tunnel.name)}
+									<option value={tunnel.name}>{tunnel.name}</option>
+								{/each}
+							</select>
+						{:else}
+							<input
+								id="vpn-control-target"
+								class="input"
+								bind:value={controlTarget}
+								maxlength="64"
+								pattern="[a-zA-Z0-9_][a-zA-Z0-9_.-]*"
+								placeholder="Optional, e.g. nordvpn"
+								aria-describedby="vpn-control-help"
+								disabled={discovering}
+							/>
+						{/if}</label
 					>
 				</div>
+				<Button
+					loading={discovering}
+					disabled={saving || controlling !== null}
+					onclick={() => void findTunnels()}>Find tunnels</Button
+				>
+				{#if discovering}<p role="status" class="text-muted">Finding VPN tunnels…</p>{/if}
+				{#if tunnelError}<p role="alert" class="error-banner">{tunnelError}</p>{/if}
+				{#if availableTunnels !== null && matchingTunnels.length === 0}<p
+						role="status"
+						class="text-muted"
+					>
+						No tunnels found for this type.
+					</p>{/if}
 				<p id="vpn-control-help" class="text-muted">
-					{controlMode === 'openvpn'
-						? 'Use the OpenVPN configuration name shown in OpenWrt.'
-						: 'Use the VPN network interface name shown in OpenWrt.'} Leave blank for monitoring only.
+					{#if availableTunnels !== null}
+						Choose a tunnel from OpenWrt. A single available tunnel is selected automatically.
+						Choose Monitoring only to leave tunnel controls disabled.
+					{:else}
+						Find tunnels using the SSH details above, or enter a tunnel name manually. Leave blank
+						for monitoring only.
+					{/if}
 					Disconnecting affects clients using this tunnel.
 				</p>
 				<label class="enabled-toggle"
@@ -337,7 +445,7 @@
 					type="submit"
 					variant="primary"
 					loading={saving}
-					disabled={refreshing || controlling !== null}>Test and save</Button
+					disabled={refreshing || discovering || controlling !== null}>Test and save</Button
 				>
 			</form>
 		</Card>

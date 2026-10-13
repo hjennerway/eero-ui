@@ -1908,6 +1908,11 @@ export interface VPNConnectionUpdate {
 	password: string | null;
 }
 
+export interface VPNTunnel {
+	name: string;
+	control_mode: 'openvpn' | 'network';
+}
+
 export interface VPNSnapshot {
 	host: string;
 	interface: string;

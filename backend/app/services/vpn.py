@@ -76,6 +76,11 @@ class VPNConnection(BaseModel):
     host_key: str | None
 
 
+class VPNTunnel(BaseModel):
+    name: str
+    control_mode: Literal["openvpn", "network"]
+
+
 class VPNSnapshot(BaseModel):
     host: str = "192.168.4.10"
     interface: str = "tun0"
@@ -139,6 +144,63 @@ def connection_status(config: VPNConfig) -> VPNConnection:
     return VPNConnection(
         **config.model_dump(exclude={"password"}), password_set=bool(config.password)
     )
+
+
+def connection_config(current: VPNConfig, update: VPNConnectionUpdate) -> VPNConfig:
+    same_device = (current.host, current.port, current.username) == (
+        update.host,
+        update.port,
+        update.username,
+    )
+    return VPNConfig(
+        **update.model_dump(exclude={"password", "host_key"}),
+        password=(
+            (update.password or current.password)
+            if same_device and update.enabled
+            else update.password if update.enabled else None
+        ),
+        host_key=current.host_key if same_device else None,
+    )
+
+
+def discovery_command() -> str:
+    # Return only names and protocols; never transmit configuration contents or keys.
+    # Read configuration rather than runtime devices so stopped tunnels are included.
+    return r"""LC_ALL=C
+[ -r /etc/openwrt_release ] && [ -r /lib/functions.sh ] || exit 1
+. /lib/functions.sh
+vpn_openvpn_name() { printf 'openvpn\t%s\n' "$1"; }
+vpn_network_name() {
+  local proto
+  config_get proto "$1" proto
+  case "$proto" in wireguard|openvpn) printf 'network\t%s\n' "$1" ;; esac
+}
+if [ -x /etc/init.d/openvpn ]; then
+  config_load openvpn
+  config_foreach vpn_openvpn_name openvpn
+  for file in /etc/openvpn/*.conf; do
+    [ -f "$file" ] || continue
+    name="${file##*/}"
+    printf 'openvpn\t%s\n' "${name%.conf}"
+  done
+fi
+config_load network || exit 1
+config_foreach vpn_network_name interface
+"""
+
+
+def discover_openwrt(config: VPNConfig) -> list[VPNTunnel]:
+    output, _ = _run_openwrt(config, discovery_command())
+    names: set[tuple[str, str]] = set()
+    for row in output.splitlines():
+        parts = row.split("\t")
+        if (
+            len(parts) == 2
+            and parts[0] in ("openvpn", "network")
+            and re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63}", parts[1])
+        ):
+            names.add((parts[0], parts[1]))
+    return [VPNTunnel(control_mode=mode, name=name) for mode, name in sorted(names)]
 
 
 def collector_command(interface: str) -> str:
@@ -379,23 +441,19 @@ class VPNService:
         async with self._lock:
             return connection_status(await asyncio.to_thread(read_config, self.path))
 
+    async def tunnels(self, update: VPNConnectionUpdate) -> list[VPNTunnel]:
+        async with self._lock:
+            current = await asyncio.to_thread(read_config, self.path)
+            # Discovery works even when monitoring is disabled, without saving anything.
+            config = connection_config(
+                current, update.model_copy(update={"enabled": True})
+            )
+            return await asyncio.to_thread(discover_openwrt, config)
+
     async def update(self, update: VPNConnectionUpdate) -> VPNConnection:
         async with self._lock:
             current = await asyncio.to_thread(read_config, self.path)
-            same_device = (current.host, current.port, current.username) == (
-                update.host,
-                update.port,
-                update.username,
-            )
-            config = VPNConfig(
-                **update.model_dump(exclude={"password", "host_key"}),
-                password=(
-                    (update.password or current.password)
-                    if same_device and update.enabled
-                    else update.password if update.enabled else None
-                ),
-                host_key=current.host_key if same_device else None,
-            )
+            config = connection_config(current, update)
             # Authenticate and inspect before saving. A down tunnel is still a valid SSH connection.
             if config.enabled:
                 data, fingerprint = await asyncio.to_thread(read_openwrt, config)

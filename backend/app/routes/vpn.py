@@ -17,6 +17,7 @@ from ..services.vpn import (
     VPNReadError,
     VPNService,
     VPNSnapshot,
+    VPNTunnel,
 )
 
 router = APIRouter(dependencies=[Depends(require_auth)])
@@ -65,6 +66,16 @@ async def update_connection(
         ) from exc
     await monitor.collect_once()
     return result
+
+
+@router.post("/tunnels", response_model=list[VPNTunnel])
+async def tunnels(update: VPNConnectionUpdate, monitor: VPNService = Depends(service)):
+    try:
+        return await monitor.tunnels(update)
+    except VPNReadError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(503, "Could not discover VPN tunnels.") from exc
 
 
 @router.get("/history")

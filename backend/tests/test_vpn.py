@@ -2,6 +2,9 @@
 
 import asyncio
 import json
+import shlex
+import shutil
+import subprocess
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -214,6 +217,7 @@ async def test_invalid_settings_do_not_echo_credentials(auth_client, monitor, pa
         ("GET", "/api/vpn/connection"),
         ("PUT", "/api/vpn/connection"),
         ("POST", "/api/vpn/tunnel"),
+        ("POST", "/api/vpn/tunnels"),
     ],
 )
 async def test_all_routes_require_login(async_client, monitor, method, url):
@@ -441,3 +445,172 @@ async def test_collections_publish_disabled_and_live_readings(monitor, monkeypat
     await monitor.collect_once()
     assert publisher.call_args.args[0].status == "connected"
     assert publisher.call_args.args[0].control_available
+
+
+def test_discovery_returns_sorted_unique_safe_tunnel_names(monkeypatch):
+    remote = MagicMock(
+        return_value=(
+            "openvpn\tnordvpn\nnetwork\twg_vpn\nopenvpn\tnordvpn\n"
+            "openvpn\tbackup\nnetwork\twg-down\nopenvpn\t../unsafe\n"
+            "openvpn\tbad; reboot\nother\tlan\nnetwork\t" + "a" * 65 + "\n",
+            "SHA256:fixture",
+        )
+    )
+    monkeypatch.setattr(vpn, "_run_openwrt", remote)
+    config = vpn.VPNConfig(password="private-password", host_key="SHA256:fixture")
+    assert [item.model_dump() for item in vpn.discover_openwrt(config)] == [
+        {"control_mode": "network", "name": "wg-down"},
+        {"control_mode": "network", "name": "wg_vpn"},
+        {"control_mode": "openvpn", "name": "backup"},
+        {"control_mode": "openvpn", "name": "nordvpn"},
+    ]
+    remote.assert_called_once_with(config, vpn.discovery_command())
+
+
+@pytest.mark.parametrize("openvpn_installed", [True, False])
+def test_discovery_command_lists_configured_vpns_without_reading_files(
+    tmp_path, monkeypatch, openvpn_installed
+):
+    shell = shutil.which("sh")
+    if not shell:
+        pytest.skip("A POSIX shell is needed to exercise the OpenWrt command")
+    etc = tmp_path / "etc"
+    library = tmp_path / "lib"
+    (etc / "init.d").mkdir(parents=True)
+    (etc / "openvpn").mkdir()
+    library.mkdir()
+    (etc / "openwrt_release").touch()
+    if openvpn_installed:
+        service = etc / "init.d" / "openvpn"
+        service.write_text("#!/bin/sh\nexit 1\n")
+        service.chmod(0o700)
+    for name in ("nordvpn", "file-vpn", "bad name"):
+        (etc / "openvpn" / f"{name}.conf").write_text("private-file-contents")
+    (library / "functions.sh").write_text("""config_load() { fixture_package="$1"; }
+config_foreach() {
+  case "$fixture_package:$2" in
+    openvpn:openvpn) "$1" nordvpn; "$1" stopped_vpn ;;
+    network:interface) "$1" lan; "$1" wg_vpn; "$1" vpn_net; "$1" wan ;;
+  esac
+}
+config_get() {
+  case "$2:$3" in
+    wg_vpn:proto) eval "$1=wireguard" ;;
+    vpn_net:proto) eval "$1=openvpn" ;;
+    wan:proto) eval "$1=dhcp" ;;
+    *) eval "$1=static" ;;
+  esac
+}
+""")
+    command = vpn.discovery_command().replace("/etc", shlex.quote(etc.as_posix()))
+    command = command.replace("/lib", shlex.quote(library.as_posix()))
+    result = subprocess.run(
+        [shell, "-s"],
+        input=command,
+        text=True,
+        capture_output=True,
+        timeout=5,
+        check=True,
+    )
+    assert "private-file-contents" not in result.stdout
+    monkeypatch.setattr(
+        vpn, "_run_openwrt", lambda *_: (result.stdout, "SHA256:fixture")
+    )
+    expected = [
+        {"control_mode": "network", "name": "vpn_net"},
+        {"control_mode": "network", "name": "wg_vpn"},
+    ]
+    if openvpn_installed:
+        expected += [
+            {"control_mode": "openvpn", "name": "file-vpn"},
+            {"control_mode": "openvpn", "name": "nordvpn"},
+            {"control_mode": "openvpn", "name": "stopped_vpn"},
+        ]
+    assert [
+        item.model_dump() for item in vpn.discover_openwrt(vpn.VPNConfig())
+    ] == expected
+
+
+@pytest.mark.parametrize("new_host", [False, True])
+async def test_discovery_uses_form_credentials_without_saving(
+    auth_client, monitor, monkeypatch, new_host
+):
+    vpn.save_config(
+        monitor.path,
+        vpn.VPNConfig(password="saved-private-password", host_key="SHA256:fixture"),
+    )
+    original = monitor.path.read_bytes()
+    remote = MagicMock(
+        return_value=[vpn.VPNTunnel(name="nordvpn", control_mode="openvpn")]
+    )
+    monkeypatch.setattr(vpn, "discover_openwrt", remote)
+    response = await auth_client.post(
+        "/api/vpn/tunnels",
+        json={
+            "enabled": False,
+            "host": "192.168.4.11" if new_host else "192.168.4.10",
+            "password": "new-private-password" if new_host else None,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json() == [{"control_mode": "openvpn", "name": "nordvpn"}]
+    config = remote.call_args.args[0]
+    assert config.password.get_secret_value() == (
+        "new-private-password" if new_host else "saved-private-password"
+    )
+    assert config.host_key == (None if new_host else "SHA256:fixture")
+    assert "private-password" not in response.text
+    assert monitor.path.read_bytes() == original
+    monitor.victoria.write.assert_not_awaited()
+
+
+async def test_discovery_does_not_reuse_credentials_for_another_device(
+    auth_client, monitor, monkeypatch
+):
+    vpn.save_config(monitor.path, vpn.VPNConfig(password="private-password"))
+    remote = MagicMock(return_value=[])
+    monkeypatch.setattr(vpn, "discover_openwrt", remote)
+    response = await auth_client.post("/api/vpn/tunnels", json={"host": "192.168.4.11"})
+    assert response.status_code == 200 and response.json() == []
+    assert remote.call_args.args[0].password is None
+
+
+async def test_discovery_failures_and_invalid_credentials_do_not_save_or_leak(
+    auth_client, monitor, monkeypatch
+):
+    remote = MagicMock(side_effect=vpn.VPNReadError("SSH login failed."))
+    monkeypatch.setattr(vpn, "discover_openwrt", remote)
+    response = await auth_client.post(
+        "/api/vpn/tunnels", json={"password": "private-password"}
+    )
+    assert response.status_code == 422 and "SSH login failed" in response.text
+    response = await auth_client.post(
+        "/api/vpn/tunnels", json={"host": "8.8.8.8", "password": "private-password"}
+    )
+    assert response.status_code == 422 and "private-password" not in response.text
+    remote.assert_called_once()
+    assert not monitor.path.exists()
+
+
+async def test_discovery_requires_csrf_header(auth_client, monitor, monkeypatch):
+    remote = MagicMock()
+    monkeypatch.setattr(vpn, "discover_openwrt", remote)
+    response = await auth_client.post(
+        "/api/vpn/tunnels", json={}, headers={"X-Requested-With": ""}
+    )
+    assert response.status_code == 403
+    remote.assert_not_called()
+
+
+def test_discovery_host_key_is_checked_before_authentication(monkeypatch):
+    transport = MagicMock()
+    transport.__enter__.return_value = transport
+    transport.get_remote_server_key.return_value.asbytes.return_value = b"changed-key"
+    monkeypatch.setattr(vpn.paramiko, "Transport", lambda sock: transport)
+    monkeypatch.setattr(vpn.socket, "create_connection", MagicMock())
+    with pytest.raises(vpn.VPNReadError, match="host key changed"):
+        vpn.discover_openwrt(
+            vpn.VPNConfig(host_key="SHA256:expected", password="private")
+        )
+    transport.auth_password.assert_not_called()
+    transport.open_session.assert_not_called()

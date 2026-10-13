@@ -8,7 +8,8 @@ const calls = vi.hoisted(() => ({
 	connection: vi.fn(),
 	history: vi.fn(),
 	saveConnection: vi.fn(),
-	control: vi.fn()
+	control: vi.fn(),
+	tunnels: vi.fn()
 }));
 vi.mock('$api/client', () => ({ api: { vpn: calls } }));
 
@@ -63,6 +64,10 @@ describe('VPN page', () => {
 		});
 		calls.saveConnection.mockReset().mockResolvedValue(connection);
 		calls.control.mockReset().mockResolvedValue(snapshot);
+		calls.tunnels.mockReset().mockResolvedValue([
+			{ name: 'nordvpn', control_mode: 'openvpn' },
+			{ name: 'wg_vpn', control_mode: 'network' }
+		]);
 	});
 	afterEach(() => {
 		cleanup();
@@ -103,6 +108,7 @@ describe('VPN page', () => {
 		render(Page);
 		await flush();
 		await fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+		await flush();
 		const password = screen.getByLabelText('SSH password');
 		expect(password).toHaveValue('');
 		await fireEvent.input(password, { target: { value: 'fixture-password' } });
@@ -185,12 +191,119 @@ describe('VPN page', () => {
 		render(Page);
 		await flush();
 		await fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+		await flush();
 		await fireEvent.change(screen.getByLabelText('Tunnel type'), { target: { value: 'network' } });
-		await fireEvent.input(screen.getByLabelText('Tunnel name'), { target: { value: 'wg_vpn' } });
+		expect(screen.getByLabelText('Tunnel name')).toHaveValue('wg_vpn');
 		await fireEvent.click(screen.getByRole('button', { name: 'Test and save' }));
 		await flush();
 		expect(calls.saveConnection).toHaveBeenCalledWith(
 			expect.objectContaining({ control_mode: 'network', control_target: 'wg_vpn', password: null })
 		);
+	});
+	it('lists tunnels and preserves an existing selection when there are several', async () => {
+		calls.tunnels.mockResolvedValue([
+			{ name: 'backup', control_mode: 'openvpn' },
+			{ name: 'nordvpn', control_mode: 'openvpn' },
+			{ name: 'wg_vpn', control_mode: 'network' }
+		]);
+		render(Page);
+		await flush();
+		await fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+		await flush();
+		expect(screen.getByRole('combobox', { name: 'Tunnel name' })).toHaveValue('nordvpn');
+		expect(screen.getByRole('option', { name: 'backup' })).toBeInTheDocument();
+		expect(screen.queryByRole('option', { name: 'wg_vpn' })).not.toBeInTheDocument();
+		await fireEvent.change(screen.getByLabelText('Tunnel name'), { target: { value: 'backup' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Test and save' }));
+		await flush();
+		expect(calls.saveConnection).toHaveBeenCalledWith(
+			expect.objectContaining({ control_target: 'backup' })
+		);
+	});
+	it.each(['openvpn', 'network'])(
+		'automatically selects the only %s tunnel and its type',
+		async (mode) => {
+			calls.connection.mockResolvedValue({ ...connection, control_target: '' });
+			calls.tunnels.mockResolvedValue([{ name: 'only_vpn', control_mode: mode }]);
+			render(Page);
+			await flush();
+			await fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+			await flush();
+			expect(screen.getByLabelText('Tunnel type')).toHaveValue(mode);
+			expect(screen.getByLabelText('Tunnel name')).toHaveValue('only_vpn');
+			await fireEvent.click(screen.getByRole('button', { name: 'Test and save' }));
+			await flush();
+			expect(calls.saveConnection).toHaveBeenCalledWith(
+				expect.objectContaining({ control_mode: mode, control_target: 'only_vpn' })
+			);
+		}
+	);
+	it('leaves multiple tunnels for selection and allows monitoring only', async () => {
+		calls.connection.mockResolvedValue({ ...connection, control_target: '' });
+		calls.tunnels.mockResolvedValue([
+			{ name: 'backup', control_mode: 'openvpn' },
+			{ name: 'nordvpn', control_mode: 'openvpn' }
+		]);
+		render(Page);
+		await flush();
+		await fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+		await flush();
+		expect(screen.getByLabelText('Tunnel name')).toHaveValue('');
+		await fireEvent.change(screen.getByLabelText('Tunnel name'), { target: { value: 'nordvpn' } });
+		await fireEvent.change(screen.getByLabelText('Tunnel name'), { target: { value: '' } });
+		await fireEvent.click(screen.getByRole('button', { name: 'Test and save' }));
+		await flush();
+		expect(calls.saveConnection).toHaveBeenCalledWith(
+			expect.objectContaining({ control_target: '' })
+		);
+	});
+	it('reports when no tunnels are found without selecting one', async () => {
+		calls.connection.mockResolvedValue({ ...connection, control_target: '' });
+		calls.tunnels.mockResolvedValue([]);
+		render(Page);
+		await flush();
+		await fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+		await flush();
+		expect(screen.getByText('No tunnels found for this type.')).toBeInTheDocument();
+		expect(screen.getByLabelText('Tunnel name')).toHaveValue('');
+	});
+	it('retries discovery using edited credentials after a failure', async () => {
+		calls.tunnels.mockRejectedValueOnce(new Error('SSH login failed.'));
+		render(Page);
+		await flush();
+		await fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+		await flush();
+		expect(screen.getByText('SSH login failed.')).toBeInTheDocument();
+		await fireEvent.input(screen.getByLabelText('SSH password'), {
+			target: { value: 'new-password' }
+		});
+		await fireEvent.click(screen.getByRole('button', { name: 'Find tunnels' }));
+		await flush();
+		expect(calls.tunnels).toHaveBeenLastCalledWith(
+			expect.objectContaining({ password: 'new-password' })
+		);
+		expect(screen.getByRole('combobox', { name: 'Tunnel name' })).toBeInTheDocument();
+		expect(screen.queryByText('SSH login failed.')).not.toBeInTheDocument();
+		expect(calls.saveConnection).not.toHaveBeenCalled();
+	});
+	it('ignores discovery results if the connection details change during the request', async () => {
+		let finish!: (value: { name: string; control_mode: string }[]) => void;
+		calls.tunnels.mockReturnValueOnce(
+			new Promise((resolve) => {
+				finish = resolve;
+			})
+		);
+		render(Page);
+		await flush();
+		await fireEvent.click(screen.getByRole('button', { name: 'Connection' }));
+		await flush();
+		expect(screen.getByRole('button', { name: 'Test and save' })).toBeDisabled();
+		await fireEvent.input(screen.getByLabelText('OpenWrt address'), {
+			target: { value: '192.168.4.11' }
+		});
+		finish([{ name: 'old_vpn', control_mode: 'openvpn' }]);
+		await flush();
+		expect(screen.queryByRole('option', { name: 'old_vpn' })).not.toBeInTheDocument();
+		expect(screen.getByLabelText('Tunnel name')).toHaveValue('nordvpn');
 	});
 });
