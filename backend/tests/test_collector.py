@@ -7,7 +7,7 @@ failure, write failure, the tricky-label round trip, and the offline vs.
 absent device rules.
 """
 
-from unittest.mock import AsyncMock, create_autospec
+from unittest.mock import AsyncMock, Mock, create_autospec
 
 import pytest
 from eero.exceptions import (
@@ -148,6 +148,49 @@ def make_collector(client, victoria) -> MetricsCollector:
 def samples_by_name(samples: list[Sample], name: str) -> list[Sample]:
     """Filter a sample list down to one metric name."""
     return [s for s in samples if s.name == name]
+
+
+class TestMQTTPublishing:
+    async def test_publishes_normalized_samples_even_if_metrics_store_fails(
+        self, autospec_client, fake_victoria
+    ):
+        autospec_client.get_devices.return_value = make_raw_response(
+            [make_device(wireless=False)]
+        )
+        autospec_client.get_speed_tests.return_value = make_raw_response(
+            [{"speed": {"down": {"value": 500}, "up": {"value": 100}}}]
+        )
+        fake_victoria.write.side_effect = VictoriaWriteError("store unreachable")
+        publish = Mock()
+
+        async def get_client():
+            yield autospec_client
+
+        collector = MetricsCollector(get_client, fake_victoria, publish_samples=publish)
+        await collector.run_cycle()
+        batch = publish.call_args.args[0]
+        assert (
+            samples_by_name(batch, "eero_device_connected")[0].labels["connection_type"]
+            == "wired"
+        )
+        assert samples_by_name(batch, "eero_speed_download_mbps")[0].value == 500
+        assert samples_by_name(batch, "eero_speed_upload_mbps")[0].value == 100
+        autospec_client.get_devices.assert_awaited_once()
+        autospec_client.get_speed_tests.assert_awaited_once_with(
+            network_id="net-1", limit=1
+        )
+
+    async def test_mqtt_failure_does_not_stop_collection(
+        self, autospec_client, fake_victoria
+    ):
+        async def get_client():
+            yield autospec_client
+
+        collector = MetricsCollector(
+            get_client, fake_victoria, publish_samples=Mock(side_effect=RuntimeError)
+        )
+        await collector.run_cycle()
+        assert len(fake_victoria.written_batches) == 1
 
 
 class TestUnauthenticatedCycle:

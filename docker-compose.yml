@@ -7,6 +7,8 @@ services:
     volumes:
       # Persist session data and metrics across container restarts
       - eero-data:/data
+      # Enable together with the optional LAN discovery worker below.
+      # - eero-discovery:/discovery:ro
     environment:
       EERO_DASHBOARD_HOST: "0.0.0.0"
       EERO_DASHBOARD_PORT: "8000"
@@ -17,6 +19,7 @@ services:
       # Metrics collection configuration
       EERO_DASHBOARD_COLLECTION_INTERVAL: "${EERO_DASHBOARD_COLLECTION_INTERVAL:-60}"
       EERO_DASHBOARD_METRICS_RETENTION: "${EERO_DASHBOARD_METRICS_RETENTION:-1y}"
+      # EERO_DASHBOARD_DISCOVERY_FILE: /discovery/arp.json
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
@@ -24,6 +27,30 @@ services:
       timeout: 10s
       retries: 3
       start_period: 10s
+
+  # OPTIONAL — hourly ARP discovery on a Linux Docker host.
+  # Scans only the explicitly configured, directly attached private subnet.
+  # The dashboard keeps bridge networking; only this worker uses host networking.
+  # It has no eero credentials, inbound service or access to the session volume.
+  # eero-discovery:
+  #   build: .
+  #   entrypoint: ["python", "-m", "app.services.arp_scanner"]
+  #   working_dir: /app/backend
+  #   network_mode: host
+  #   cap_drop: [ALL]
+  #   cap_add: [NET_RAW]
+  #   security_opt: ["no-new-privileges:true"]
+  #   read_only: true
+  #   tmpfs: [/tmp]
+  #   volumes:
+  #     - eero-discovery:/discovery
+  #   environment:
+  #     EERO_DISCOVERY_NETWORK_ID: "your-network-id"
+  #     EERO_DISCOVERY_SUBNET: "192.168.1.0/24"
+  #     EERO_DISCOVERY_INTERVAL: "3600"
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     disable: true
 
   # ------------------------------------------------------------------
   # OPTIONAL — eero-prometheus-exporter (fully decoupled from eero-ui)
@@ -64,4 +91,5 @@ services:
 
 volumes:
   eero-data:
+  # eero-discovery:
   # eero-exporter-session:

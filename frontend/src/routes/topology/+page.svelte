@@ -15,7 +15,7 @@
 	<header class="page-header">
 		<div class="header-left">
 			<h1>Network Topology</h1>
-			<p class="text-muted">Visual map of your eero mesh network and connected devices</p>
+			<p class="text-muted">Visual map of your eeros, switches and connected devices</p>
 		</div>
 	</header>
 
@@ -25,9 +25,9 @@
 
 	<div class="topology-tips">
 		<p>
-			<strong>Tip:</strong> Each eero has green wired and blue wireless client groups. Drag an eero to
-			rearrange its whole group. Click a client to see its connected eero. Scroll to zoom, or drag the
-			canvas to pan.
+			<strong>Tip:</strong> Green groups show wired clients; blue groups show wireless clients. Select
+			a switch to inspect its ports, or a client to see its connection. Dashed green paths are inferred
+			from MAC addresses. Scroll to zoom, or drag the canvas to pan.
 		</p>
 	</div>
 </div>

@@ -6,7 +6,7 @@
  * i.e. on the leaf-eero row - so eeros disappeared behind devices.
  */
 
-import { afterEach, describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { api } from '$api/client';
 import type { DeviceSummary, EeroSummary } from '$api/types';
@@ -23,6 +23,18 @@ import {
 
 const NODE_W = 130;
 const NODE_H = 60;
+
+beforeEach(() => {
+	vi.spyOn(api.discovery, 'get').mockResolvedValue({
+		status: 'disabled',
+		subnet: null,
+		interval_seconds: 3600,
+		last_scan: null,
+		next_scan: null,
+		warning: null,
+		devices: []
+	});
+});
 
 function eero(id: string, location: string, isGateway = false): EeroSummary {
 	return {
@@ -242,6 +254,7 @@ describe('client groups', () => {
 		];
 		const loadEeros = vi.spyOn(api.eeros, 'list').mockResolvedValue(eeros);
 		const loadDevices = vi.spyOn(api.devices, 'list').mockResolvedValue(clients);
+		vi.spyOn(api.switches, 'list').mockResolvedValue([]);
 		await topologyStore.loadTopology();
 		expect(get(filteredTopology).nodes.filter((n) => n.type === 'clientGroup')).toHaveLength(1);
 		layoutOptionsStore.update((s) => ({ ...s, showOfflineDevices: true }));
@@ -255,5 +268,17 @@ describe('client groups', () => {
 		expect(get(filteredTopology).edges).toHaveLength(0);
 		expect(loadEeros).toHaveBeenCalledTimes(1);
 		expect(loadDevices).toHaveBeenCalledTimes(1);
+	});
+
+	it('keeps the eero topology available when optional switch data fails', async () => {
+		vi.spyOn(api.eeros, 'list').mockResolvedValue([eero('1', 'Living Room', true)]);
+		vi.spyOn(api.devices, 'list').mockResolvedValue([device(0, 'Living Room')]);
+		vi.spyOn(api.switches, 'list').mockRejectedValue(new Error('Switch unavailable'));
+		const details = vi.spyOn(api.eeros, 'get');
+		await topologyStore.loadTopology();
+		expect(get(topologyStore).error).toBeNull();
+		expect(get(topologyStore).switchWarning).toContain('Switch data is unavailable');
+		expect(get(filteredTopology).nodes.filter((n) => n.type === 'device')).toHaveLength(1);
+		expect(details).not.toHaveBeenCalled();
 	});
 });

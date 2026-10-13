@@ -147,6 +147,7 @@ class MetricsCollector:
         get_eero_client: Callable[[], AsyncGenerator[EeroClient, None]],
         victoria_client: VictoriaMetricsClient,
         interval_seconds: int = 60,
+        publish_samples: Callable[[list[Sample]], None] | None = None,
     ) -> None:
         """Initialize the collector.
 
@@ -165,6 +166,7 @@ class MetricsCollector:
         self._rate_limit_backoff = 0.0
         # Set by the first rate-limited fetch; skips the rest of the cycle.
         self._rate_limited_this_cycle = False
+        self._publish_samples = publish_samples
 
     @property
     def error_counts(self) -> dict[str, int]:
@@ -334,6 +336,12 @@ class MetricsCollector:
         except VictoriaWriteError:
             self._count_error("write")
             _LOGGER.warning("Metrics collector failed to write to VictoriaMetrics")
+
+        if self._publish_samples is not None:
+            try:
+                self._publish_samples(samples)
+            except Exception:
+                _LOGGER.warning("MQTT could not publish collected metrics")
 
     async def _collect_all_networks(
         self, client: EeroClient, samples: list[Sample], now_ms: int

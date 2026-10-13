@@ -52,6 +52,12 @@ Screenshots use **synthetic data only** — a small fictional mesh ("Maple Stree
 
 Writes that have not been verified end-to-end against a live eero network are hidden behind `EERO_DASHBOARD_EXPERIMENTAL_WRITES`; account e-mail and phone changes additionally need `EERO_DASHBOARD_ACCOUNT_IDENTITY_WRITES` — see the [Roadmap](../../wiki/Roadmap) for exactly which writes are gated and [Configuration → Write gates](../../wiki/Configuration#write-gates) for the flags.
 
+Topology can also show managed switches, their ports and link speeds using read-only SNMP, LLDP neighbours and MAC learning. Verified with the Netgear GS110TP; see [Network switches](wiki/Configuration.md#network-switches) for setup and inference limits.
+
+The **MQTT** section connects to your broker and supports Home Assistant auto discovery for wired/wireless client counts, the latest download/upload speed test, QNAP disk health and power-on hours, and each volume's total size, available space and percentage used. See [MQTT setup](wiki/Configuration.md#mqtt-and-home-assistant).
+
+The **NAS** section reads QNAP disk status, SMART health summaries, temperatures and storage usage using read-only SNMP, with cached readings refreshed every five minutes in the background. Use **QTS connection** on the NAS page to test and save a login for power-on time in years, months, days and hours, plus estimated SSD life remaining. See [QNAP NAS setup](wiki/Configuration.md#qnap-nas-health-and-storage).
+
 **Keyboard shortcuts** — `⌘K` / `Ctrl+K` opens the command palette, `?` shows the shortcuts help, `Esc` closes the open dialog or menu. Shortcuts never fire while you are typing in a field. Device filters (`q`, `status`, `conn`, `band`, `sort`, `dir`) are encoded in the URL, so a filtered view survives a refresh and can be shared.
 
 **Runtime dependencies added in 6.0** — exactly one: [`@tanstack/svelte-virtual`](https://github.com/TanStack/virtual) (MIT), which virtualizes the device table so a few hundred rows stay smooth. The UI fonts (Inter and JetBrains Mono, variable WOFF2) are self-hosted from `frontend/static/fonts/` under the SIL Open Font License; the licence text ships in `static/fonts/OFL.txt`. Nothing is fetched from a third party at runtime.

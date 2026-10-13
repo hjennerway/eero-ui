@@ -1,0 +1,17 @@
+[
+  {
+    "id": "qnap",
+    "network_id": "YOUR_EERO_NETWORK_ID",
+    "name": "QNAP TVS-473e",
+    "host": "192.168.4.2",
+    "port": 161,
+    "community": "YOUR_READ_ONLY_COMMUNITY",
+    "qts": {
+      "username": "YOUR_QTS_MONITORING_USER",
+      "password": "YOUR_QTS_PASSWORD",
+      "port": 443,
+      "https": true,
+      "verify_tls": true
+    }
+  }
+]

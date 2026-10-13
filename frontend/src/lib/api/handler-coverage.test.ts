@@ -42,6 +42,19 @@ describe('api client handler coverage', () => {
 		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
 		const calls: Array<() => Promise<unknown>> = [
+			() => api.nas.list('network-123'),
+			() => api.discovery.get(),
+			() => api.switches.list(),
+			() => api.mqtt.get(),
+			() =>
+				api.mqtt.update({
+					enabled: false,
+					broker_address: '',
+					username: '',
+					password: null,
+					home_assistant_discovery: true,
+					discovery_prefix: 'homeassistant'
+				}),
 			() => api.health(),
 			() => api.virtualization.get('network-123'),
 			() => api.virtualization.connection('network-123'),
@@ -329,6 +342,6 @@ describe('api client handler coverage', () => {
 		// Guards the guard: if client.ts grows a new method, this fails until
 		// the call list above is updated too, instead of silently covering
 		// only a subset forever.
-		expect(countLeafMethods(api)).toBe(143);
+		expect(countLeafMethods(api)).toBe(151);
 	});
 });

@@ -1,50 +1,117 @@
-# ============================================================================
-# 🐳 Docker Image Build & Publish
-# ============================================================================
-# Builds multi-platform Docker images and publishes to GitHub Container Registry.
-# Uses reusable workflow from workflow-arsenal for native ARM64 builds.
-#
-# Chain: CI → Release → Docker
-# ============================================================================
-
-name: 🐳 Docker Build & Publish
+name: Publish GHCR image
 
 on:
-  workflow_run:
-    workflows: ["🚀 Release"]
-    types: [completed]
-    branches: [master]
+  push:
+    branches: [master, codex/publish-ghcr]
+    tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ghcr-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  docker:
-    name: 🐳 Docker
-    if: |
-      github.event_name == 'pull_request' ||
-      github.event_name == 'workflow_dispatch' ||
-      github.event.workflow_run.conclusion == 'success'
-    uses: fulviofreitas/workflow-arsenal/.github/workflows/docker-build.yml@master
+  test:
+    name: Test application
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      EERO_DASHBOARD_SESSION_SECRET: ci-test-secret-not-for-production-use-only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: backend/pyproject.toml
+      - name: Install backend dependencies
+        run: python -m pip install './backend[dev]'
+      - name: Backend tests
+        working-directory: backend
+        run: python -m pytest tests -q
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Frontend type check and tests
+        working-directory: frontend
+        run: |
+          npm run check
+          npm test
+
+  publish:
+    name: Build and publish
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
       packages: write
-      attestations: write
-      id-token: write
-    with:
-      image-name: ghcr.io/${{ github.repository }}
-      context: "."
-      push: ${{ github.event_name != 'pull_request' }}
-      registry: ghcr.io
-      registry-username: ${{ github.actor }}
-      annotations: |
-        org.opencontainers.image.title=eero-ui
-        org.opencontainers.image.description=A modern web dashboard for managing eero mesh WiFi networks
-        org.opencontainers.image.url=https://github.com/${{ github.repository }}
-        org.opencontainers.image.source=https://github.com/${{ github.repository }}
-        org.opencontainers.image.documentation=https://github.com/${{ github.repository }}/wiki
-        org.opencontainers.image.licenses=MIT
-    secrets:
-      registry-password: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - name: Registry image name
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+        run: echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6
+        id: metadata
+        with:
+          images: ${{ steps.image.outputs.name }}
+          flavor: latest=false
+          tags: |
+            type=sha,format=long
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=raw,value=latest,enable={{is_default_branch}}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.url=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.documentation=${{ github.server_url }}/${{ github.repository }}/wiki
+      - name: Build image for smoke test
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: eero-ui:smoke
+          cache-from: type=gha,scope=ghcr
+      - name: Verify container startup and virtualization page
+        run: |
+          docker run -d --name eero-ui-smoke -p 127.0.0.1:18000:8000 \
+            -e EERO_DASHBOARD_SESSION_SECRET=ci-smoke-test-secret-not-for-production \
+            eero-ui:smoke
+          trap 'docker logs eero-ui-smoke; docker rm -f eero-ui-smoke' EXIT
+          curl --retry 30 --retry-delay 2 --retry-all-errors --fail http://127.0.0.1:18000/api/health
+          curl --fail --output /dev/null http://127.0.0.1:18000/virtualization
+      - name: Publish AMD64 and ARM64 images
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
+        id: publish
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=ghcr
+          cache-to: type=gha,scope=ghcr,mode=max
+      - name: Record immutable deployment image
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.publish.outputs.digest }}
+        run: |
+          printf 'Published image: `%s@%s`\n' "$IMAGE" "$DIGEST" >> "$GITHUB_STEP_SUMMARY"

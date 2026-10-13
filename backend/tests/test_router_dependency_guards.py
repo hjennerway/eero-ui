@@ -43,6 +43,8 @@ from app.routes import (
     devices,
     eeros,
     metrics,
+    mqtt,
+    nas,
     networks,
     profiles,
     virtualization,
@@ -57,6 +59,8 @@ _ROUTER_PREFIXES = {
     "metrics": ("/api/metrics", metrics.router),
     "account": ("/api/account", account.router),
     "virtualization": ("/api/networks", virtualization.router),
+    "mqtt": ("/api/mqtt", mqtt.router),
+    "nas": ("/api/nas", nas.router),
 }
 # Mirrors app/main.py's app.include_router(...) calls; keep in sync if a
 # router or prefix changes there (this module cannot import app.routes

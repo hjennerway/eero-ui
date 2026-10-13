@@ -1,0 +1,10 @@
+[
+  {
+    "id": "netgear-main",
+    "network_id": "YOUR_EERO_NETWORK_ID",
+    "name": "Netgear GS110TP",
+    "host": "192.168.1.10",
+    "port": 161,
+    "community": "YOUR_READ_ONLY_SNMP_COMMUNITY"
+  }
+]

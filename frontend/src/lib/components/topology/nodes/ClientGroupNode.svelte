@@ -4,9 +4,20 @@
 	let { data }: { data: TopologyNodeData } = $props();
 </script>
 
-<div class="client-group" class:wired={data.connectionType === 'wired'}>
+<div
+	class="client-group"
+	class:wired={data.connectionType === 'wired'}
+	class:unknown={data.connectionType === 'unknown'}
+>
 	<div class="group-heading">
-		<Icon name={data.connectionType === 'wired' ? 'ethernet' : 'wifi'} size={14} />
+		<Icon
+			name={data.connectionType === 'unknown'
+				? 'help-circle'
+				: data.connectionType === 'wired'
+					? 'ethernet'
+					: 'wifi'}
+			size={14}
+		/>
 		<strong>{data.label}</strong>
 		<span class="count">{data.deviceCount}</span>
 	</div>
@@ -27,6 +38,10 @@
 
 	.client-group.wired {
 		--group-color: var(--color-success);
+	}
+	.client-group.unknown {
+		--group-color: var(--color-text-muted);
+		border-style: dotted;
 	}
 
 	.group-heading {

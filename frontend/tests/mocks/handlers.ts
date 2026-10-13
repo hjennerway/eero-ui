@@ -120,6 +120,41 @@ export const handlers = [
 	http.post('/api/networks/:networkId/virtualization/refresh', () =>
 		HttpResponse.json(emptyVirtualization)
 	),
+	http.get('/api/nas', () => HttpResponse.json([])),
+	http.get('/api/switches', () => HttpResponse.json([])),
+	http.get('/api/discovery', () =>
+		HttpResponse.json({
+			status: 'disabled',
+			subnet: null,
+			interval_seconds: 3600,
+			last_scan: null,
+			next_scan: null,
+			warning: null,
+			devices: []
+		})
+	),
+	http.get('/api/mqtt', () =>
+		HttpResponse.json({
+			enabled: false,
+			broker_address: '',
+			username: '',
+			password_set: false,
+			home_assistant_discovery: true,
+			discovery_prefix: 'homeassistant',
+			connection_status: 'disabled',
+			message: null
+		})
+	),
+	http.put('/api/mqtt', async ({ request }) => {
+		const settings = (await request.json()) as Record<string, unknown>;
+		const { password, ...publicSettings } = settings;
+		return HttpResponse.json({
+			...publicSettings,
+			password_set: Boolean(password),
+			connection_status: settings.enabled ? 'connecting' : 'disabled',
+			message: null
+		});
+	}),
 	// ============================================
 	// Auth endpoints
 	// ============================================

@@ -59,6 +59,8 @@ Thumbs.db
 # Session files
 *.json.session
 session.json
+mqtt.json
+nas.json
 
 # Coverage
 htmlcov/
