@@ -47,6 +47,17 @@ describe('api client handler coverage', () => {
 			() => api.vpn.history(),
 			() => api.vpn.control('connect'),
 			() =>
+				api.vpn.tunnels({
+					enabled: true,
+					host: '192.168.4.10',
+					port: 22,
+					username: 'root',
+					interface: 'tun0',
+					control_mode: 'openvpn',
+					control_target: 'nordvpn',
+					password: null
+				}),
+			() =>
 				api.vpn.saveConnection({
 					enabled: true,
 					host: '192.168.4.10',
@@ -357,6 +368,6 @@ describe('api client handler coverage', () => {
 		// Guards the guard: if client.ts grows a new method, this fails until
 		// the call list above is updated too, instead of silently covering
 		// only a subset forever.
-		expect(countLeafMethods(api)).toBe(156);
+		expect(countLeafMethods(api)).toBe(157);
 	});
 });

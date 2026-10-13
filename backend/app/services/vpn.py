@@ -90,6 +90,7 @@ class VPNSnapshot(BaseModel):
     ] = "unknown"
     reachable: bool = False
     connected_clients: int | None = None
+    connected_client_ips: list[str] | None = None
     download_mbps: float | None = None
     upload_mbps: float | None = None
     rx_bytes: int | None = None
@@ -373,6 +374,7 @@ def parse_reading(
     if not link or "UP" not in link.get("flags", []) or not tunnel_addresses:
         snapshot.status = "disconnected"
         snapshot.connected_clients = 0
+        snapshot.connected_client_ips = []
         snapshot.download_mbps = snapshot.upload_mbps = 0.0
         snapshot.warnings.append(
             "The tunnel interface is missing, down, or has no assigned address."
@@ -389,7 +391,7 @@ def parse_reading(
             "VPN client count is unavailable: connection tracking is missing or exceeds the collection limit."
         )
     else:
-        clients: set[str] = set()
+        clients: set[ipaddress.IPv4Address | ipaddress.IPv6Address] = set()
         for row in rows:
             if "UNREPLIED" in row or (" tcp " in row and " ESTABLISHED " not in row):
                 continue
@@ -400,7 +402,16 @@ def parse_reading(
                 and sources[0] not in local_addresses
                 and destinations[1] in tunnel_addresses
             ):
-                clients.add(sources[0])
+                try:
+                    clients.add(ipaddress.ip_address(sources[0]))
+                except ValueError:
+                    continue
+        snapshot.connected_client_ips = [
+            str(address)
+            for address in sorted(
+                clients, key=lambda address: (address.version, int(address))
+            )
+        ]
         snapshot.connected_clients = len(clients)
     snapshot.warnings.append(
         "Clients are unique source IPs with tracked, replied connections NATed through this tunnel; idle clients and traffic without NAT are not counted."

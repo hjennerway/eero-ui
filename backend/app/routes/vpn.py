@@ -40,6 +40,7 @@ async def snapshot(monitor: VPNService = Depends(service)):
         reading.stale = True
         reading.status = "unknown"
         reading.connected_clients = reading.download_mbps = reading.upload_mbps = None
+        reading.connected_client_ips = None
         reading.control_available = False
     return reading
 

@@ -83,13 +83,55 @@ def monitor(tmp_path, monkeypatch):
 def test_clients_only_include_unique_replied_tunnel_flows():
     snapshot, _ = vpn.parse_reading(vpn.VPNConfig(), reading())
     assert snapshot.status == "connected" and snapshot.connected_clients == 2
+    assert snapshot.connected_client_ips == ["192.168.4.50", "192.168.4.51"]
     snapshot, _ = vpn.parse_reading(vpn.VPNConfig(), reading(probe="1"))
     assert snapshot.status == "unknown" and snapshot.reachable
     snapshot, _ = vpn.parse_reading(vpn.VPNConfig(), reading(conntrack="UNAVAILABLE"))
     assert snapshot.connected_clients is None
+    assert snapshot.connected_client_ips is None
     snapshot, _ = vpn.parse_reading(vpn.VPNConfig(), reading(present=False))
     assert snapshot.status == "disconnected" and snapshot.connected_clients == 0
+    assert snapshot.connected_client_ips == []
     assert snapshot.download_mbps == snapshot.upload_mbps == 0
+
+
+def test_client_ips_are_sorted_numerically_and_normalized():
+    data = reading(
+        conntrack="\n".join(
+            f"ipv4 2 udp 17 60 src={address} dst=1.1.1.1 src=1.1.1.1 dst=10.8.0.2"
+            for address in [
+                "192.168.4.100",
+                "192.168.4.9",
+                "192.168.3.200",
+                "192.168.4.20",
+                "192.168.4.9",
+                "invalid-address",
+            ]
+        )
+    )
+    addresses = json.loads(data["ADDRESSES"])
+    addresses[1]["addr_info"].append({"local": "fd00:8::2", "scope": "global"})
+    data["ADDRESSES"] = json.dumps(addresses)
+    data["CONNTRACK"] += "\n" + "\n".join(
+        f"ipv6 10 udp 17 60 src={address} dst=2606:4700:4700::1111 src=2606:4700:4700::1111 dst=fd00:8::2"
+        for address in ["fd00:4::10", "fd00:4::2", "fd00:4:0:0:0:0:0:2"]
+    )
+    snapshot, _ = vpn.parse_reading(vpn.VPNConfig(), data)
+    assert snapshot.connected_client_ips == [
+        "192.168.3.200",
+        "192.168.4.9",
+        "192.168.4.20",
+        "192.168.4.100",
+        "fd00:4::2",
+        "fd00:4::10",
+    ]
+    assert snapshot.connected_clients == 6
+
+
+def test_empty_conntrack_has_no_client_ips():
+    snapshot, _ = vpn.parse_reading(vpn.VPNConfig(), reading(conntrack=""))
+    assert snapshot.connected_clients == 0
+    assert snapshot.connected_client_ips == []
 
 
 def test_changed_host_key_is_rejected_before_password_authentication(monkeypatch):
@@ -143,6 +185,7 @@ async def test_counter_deltas_reboots_resets_and_recovery(monitor, monkeypatch):
     failed = await monitor.collect_once()
     assert failed.status == "unreachable" and failed.download_mbps is None
     assert failed.connected_clients is None and failed.stale
+    assert failed.connected_client_ips is None
     assert (await monitor.collect_once()).download_mbps is None
     assert (await monitor.collect_once()).download_mbps == pytest.approx(0.8)
     samples = monitor.victoria.write.call_args_list[4].args[0]
@@ -232,6 +275,7 @@ async def test_stale_snapshot_hides_old_counts_and_rates(auth_client, monitor):
         status="connected",
         reachable=True,
         connected_clients=7,
+        connected_client_ips=["192.168.4.50"],
         download_mbps=12,
         upload_mbps=4,
         collected_at=datetime.now(UTC) - timedelta(seconds=91),
@@ -240,6 +284,18 @@ async def test_stale_snapshot_hides_old_counts_and_rates(auth_client, monitor):
     response = (await auth_client.get("/api/vpn")).json()
     assert response["status"] == "unknown" and response["stale"]
     assert response["connected_clients"] is response["download_mbps"] is None
+    assert response["connected_client_ips"] is None
+    assert monitor.snapshot.connected_client_ips == ["192.168.4.50"]
+
+
+async def test_snapshot_returns_live_client_ips(auth_client, monitor, monkeypatch):
+    monkeypatch.setattr(
+        vpn, "read_openwrt", lambda config: (reading(), "SHA256:fixture")
+    )
+    await monitor.collect_once()
+    response = await auth_client.get("/api/vpn")
+    assert response.status_code == 200
+    assert response.json()["connected_client_ips"] == ["192.168.4.50", "192.168.4.51"]
 
 
 async def test_history_is_scoped_and_preserves_unknown_status(auth_client, monitor):

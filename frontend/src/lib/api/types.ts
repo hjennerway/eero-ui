@@ -1920,6 +1920,7 @@ export interface VPNSnapshot {
 	status: 'connected' | 'disconnected' | 'unknown' | 'unreachable' | 'disabled';
 	reachable: boolean;
 	connected_clients: number | null;
+	connected_client_ips: string[] | null;
 	download_mbps: number | null;
 	upload_mbps: number | null;
 	rx_bytes: number | null;

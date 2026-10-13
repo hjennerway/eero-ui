@@ -158,6 +158,9 @@ export const handlers = [
 			host_key: 'SHA256:fixture'
 		})
 	),
+	http.post('/api/vpn/tunnels', () =>
+		HttpResponse.json([{ name: 'nordvpn', control_mode: 'openvpn' }])
+	),
 	http.post('/api/vpn/tunnel', async ({ request }) => {
 		const { action } = (await request.json()) as { action: string };
 		return HttpResponse.json({

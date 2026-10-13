@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
+import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
 import Page from './+page.svelte';
 
@@ -21,6 +21,7 @@ const snapshot = {
 	status: 'connected',
 	reachable: true,
 	connected_clients: 3,
+	connected_client_ips: ['192.168.4.9', '192.168.4.20', '192.168.4.100'],
 	download_mbps: 12.5,
 	upload_mbps: 2.25,
 	collected_at: '2026-10-13T12:00:00Z',
@@ -81,9 +82,22 @@ describe('VPN page', () => {
 		expect(screen.getByText('12.50')).toBeInTheDocument();
 		expect(screen.getByText('2.25')).toBeInTheDocument();
 		expect(screen.getByText('3')).toBeInTheDocument();
+		const clientList = screen.getByRole('list', { name: 'Connected client IP addresses' });
+		expect(
+			within(clientList)
+				.getAllByRole('listitem')
+				.map((item) => item.textContent)
+		).toEqual(snapshot.connected_client_ips);
+		calls.get.mockResolvedValue({
+			...snapshot,
+			connected_clients: 1,
+			connected_client_ips: ['192.168.4.50']
+		});
 		await vi.advanceTimersByTimeAsync(30000);
 		await flush();
 		expect(calls.get).toHaveBeenCalledTimes(2);
+		expect(screen.getByText('192.168.4.50')).toBeInTheDocument();
+		expect(screen.queryByText('192.168.4.9')).not.toBeInTheDocument();
 		visible('hidden');
 		await vi.advanceTimersByTimeAsync(60000);
 		expect(calls.get).toHaveBeenCalledTimes(2);
@@ -101,8 +115,31 @@ describe('VPN page', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
 		await flush();
 		expect(screen.queryByText('12.50')).not.toBeInTheDocument();
+		expect(screen.queryByText('192.168.4.9')).not.toBeInTheDocument();
 		expect(screen.getByText('Unknown')).toBeInTheDocument();
 		expect(screen.getByText('OpenWrt unavailable')).toBeInTheDocument();
+	});
+	it.each([
+		{ ...snapshot, connected_client_ips: null },
+		{ ...snapshot, stale: true }
+	])('shows unavailable client addresses when data is missing or stale', async (reading) => {
+		calls.get.mockResolvedValue(reading);
+		render(Page);
+		await flush();
+		expect(screen.queryByText('192.168.4.9')).not.toBeInTheDocument();
+		expect(
+			screen.getByText('Client IP addresses are unavailable. Waiting for the next reading.')
+		).toBeInTheDocument();
+	});
+	it('shows an empty state when no clients are active', async () => {
+		calls.get.mockResolvedValue({
+			...snapshot,
+			connected_clients: 0,
+			connected_client_ips: []
+		});
+		render(Page);
+		await flush();
+		expect(screen.getByText('No active clients through the tunnel.')).toBeInTheDocument();
 	});
 	it('saves the password through the connection form and clears the field', async () => {
 		render(Page);
@@ -134,6 +171,7 @@ describe('VPN page', () => {
 			...snapshot,
 			status: 'disconnected',
 			connected_clients: 0,
+			connected_client_ips: [],
 			download_mbps: 0,
 			upload_mbps: 0
 		};

@@ -184,6 +184,7 @@
 						stale: true,
 						status: 'unknown',
 						connected_clients: null,
+						connected_client_ips: null,
 						download_mbps: null,
 						upload_mbps: null
 					};
@@ -497,6 +498,20 @@
 				? ' · Throughput appears after two readings.'
 				: ''}
 		</p>
+		<Card title="Client IP addresses">
+			{#if snapshot.stale || snapshot.connected_client_ips == null}
+				<p class="text-muted">Client IP addresses are unavailable. Waiting for the next reading.</p>
+			{:else if snapshot.connected_client_ips.length === 0}
+				<p class="text-muted">No active clients through the tunnel.</p>
+			{:else}
+				<ul class="client-ips" aria-label="Connected client IP addresses">
+					{#each snapshot.connected_client_ips as ip (ip)}
+						<li><code>{ip}</code></li>
+					{/each}
+				</ul>
+			{/if}
+			<p class="metric-note">Active clients using the tunnel, sorted by IP address.</p>
+		</Card>
 		{#if snapshot.warnings.length}<details>
 				<summary>About these readings</summary>{#each snapshot.warnings as warning}<p
 						class="text-muted"
@@ -609,6 +624,18 @@
 	}
 	.metric-note {
 		margin-top: var(--space-2);
+	}
+	.client-ips {
+		display: grid;
+		grid-template-columns: repeat(auto-fit, minmax(min(100%, 18rem), 1fr));
+		gap: var(--space-2) var(--space-4);
+		list-style: none;
+		margin: 0;
+		padding: 0;
+	}
+	.client-ips li {
+		padding: var(--space-2) 0;
+		overflow-wrap: anywhere;
 	}
 	form,
 	.connection-fields label {
