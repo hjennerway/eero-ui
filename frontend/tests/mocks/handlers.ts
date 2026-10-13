@@ -87,7 +87,39 @@ export const roamingFixture: RoamingResponse = {
 	]
 };
 
+const emptyVirtualization = {
+	configured: false,
+	refreshing: false,
+	collected_at: null,
+	attempted_at: null,
+	stale: false,
+	error: null,
+	nodes: [],
+	background_interval_seconds: 600,
+	visible_interval_seconds: 60
+};
+const emptyVirtualizationConnection = {
+	configured: false,
+	url: '',
+	token_id: '',
+	has_token: false,
+	has_ca_certificate: false,
+	docker_enabled: false,
+	docker_port: 2376,
+	has_docker_certificates: false
+};
+
 export const handlers = [
+	http.get('/api/networks/:networkId/virtualization', () => HttpResponse.json(emptyVirtualization)),
+	http.get('/api/networks/:networkId/virtualization/connection', () =>
+		HttpResponse.json(emptyVirtualizationConnection)
+	),
+	http.put('/api/networks/:networkId/virtualization/connection', () =>
+		HttpResponse.json({ ...emptyVirtualizationConnection, configured: true, has_token: true })
+	),
+	http.post('/api/networks/:networkId/virtualization/refresh', () =>
+		HttpResponse.json(emptyVirtualization)
+	),
 	// ============================================
 	// Auth endpoints
 	// ============================================

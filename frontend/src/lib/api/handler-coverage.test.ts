@@ -43,6 +43,21 @@ describe('api client handler coverage', () => {
 
 		const calls: Array<() => Promise<unknown>> = [
 			() => api.health(),
+			() => api.virtualization.get('network-123'),
+			() => api.virtualization.connection('network-123'),
+			() => api.virtualization.refresh('network-123'),
+			() =>
+				api.virtualization.saveConnection('network-123', {
+					url: 'https://proxmox.example:8006',
+					token_id: 'monitor@pve!inventory',
+					token_secret: 'fixture-secret',
+					ca_certificate: null,
+					docker_enabled: false,
+					docker_port: 2376,
+					docker_ca_certificate: null,
+					docker_client_certificate: null,
+					docker_client_key: null
+				}),
 			() => api.auth.status(),
 			() => api.auth.login('user@example.com'),
 			() => api.auth.verify('123456'),
@@ -314,6 +329,6 @@ describe('api client handler coverage', () => {
 		// Guards the guard: if client.ts grows a new method, this fails until
 		// the call list above is updated too, instead of silently covering
 		// only a subset forever.
-		expect(countLeafMethods(api)).toBe(139);
+		expect(countLeafMethods(api)).toBe(143);
 	});
 });

@@ -21,6 +21,28 @@ All settings are read once at startup from the environment (`backend/app/config.
 
 Removed in 6.0 (setting either has no effect): `EERO_EXPORTER_SESSION_PATH`, `EERO_DASHBOARD_METRICS_ENDPOINT_ENABLED`.
 
+## Virtualization
+
+The **Virtualization** page connects a Proxmox cluster to the selected eero network. Open **Connection** on that page, enter one node's HTTPS address (normally `https://<node>:8006`), and a dedicated API token ID and secret. For Proxmox 9, a monitoring role needs `Sys.Audit`, `VM.Audit`, and `VM.GuestAgent.Audit`. Give the backing user and a privilege-separated token the appropriate permissions. Install and enable QEMU Guest Agents for live VM OS and interface information. No guest commands are executed.
+
+Paste the cluster's CA certificate when its certificate is not publicly trusted. Certificate validation and hostname checks remain enabled. Use HTTPS for the dashboard when entering credentials.
+
+For Docker inventory, enable authenticated TLS access on the **existing Docker engines** on each guest. Follow [Docker's TLS setup](https://docs.docker.com/engine/security/protect-access/), retain the local socket used by Dockge, and normally listen on port `2376`. Enabling the listener may require restarting Docker. Each server certificate must include its guest's LAN IP address as a subject alternative name. Configure the trusted Docker CA and the dashboard's client certificate/private key in the connection form. The same client trust can cover multiple hosts; no collector or extra guest software is needed. Client certificates grant engine management access even though this page only reads inventory.
+
+Discovery tries up to two current private LAN addresses per guest, obtained from Proxmox interfaces, guest agents, or unambiguous current eero MAC matches. It does not scan arbitrary subnets or infer that an inaccessible Docker API means Docker is absent. Bridge-only Docker container addresses are not used to establish guest ownership. Proxmox supplies ownership, including migrations.
+
+Refresh behavior:
+
+- The backend refreshes connected networks on startup and every **10 minutes**, independently of browser sessions.
+- An open, visible Virtualization page requests refreshes every **60 seconds**. Hidden tabs stop requesting refreshes and resume when visible.
+- **Refresh** requests an immediate collection. Concurrent requests share one collection; a recent collection suppresses redundant automatic requests.
+- A page refresh postpones the next background refresh until 10 minutes after that collection started. Failed attempts also respect the interval to avoid retry storms.
+- Connection failures preserve the last inventory and label it stale. A stopped guest's saved Docker states are explicitly historical, rather than being rewritten as stopped.
+
+Connection secrets and last inventories are saved in a `virtualization` directory beside `EERO_DASHBOARD_COOKIE_FILE` (inside the existing persistent Docker volume). Connection files contain credentials, are written atomically with owner-only file permissions on Linux, and must be protected with the session volume. API responses never return saved tokens, certificates, or keys. Blank credential fields retain previously saved values. Each eero network has its own connection and snapshot.
+
+OS information is best effort: guest agents and Docker report the installed OS; Proxmox configuration supplies a fallback. An LXC without a reporting source shows its configured distribution and an unavailable release version. Stopped VMs retain previously reported OS information when available.
+
 ## Session Secret
 
 For production, always set a strong session secret:

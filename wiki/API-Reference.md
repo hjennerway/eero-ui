@@ -222,6 +222,19 @@ All routes require a session (router-level `require_auth`) and validate every pa
 | `GET` | `/api/metrics/network/client_count` | `start`, `end`, `step=5m` | `{total, wireless, wired, client_count}` |
 | `GET` | `/api/metrics/roaming` | `network_id`, `range=24h` (`1h`/`6h`/`24h`/`7d`), `device_id?` | `RoamingResponse {network_id, range, start, end, resolution_seconds, total_events, truncated, events[], top_roamers[]}`; newest first, at most 500 events. `400` on a malformed id or unknown range, `404` when `network_id` is not on the session's account, `422` when the range holds more than 2,000 device series. Limit: `metrics_history` scope, 30/minute |
 
+## Virtualization (`/api/networks/{network_id}/virtualization`)
+
+All routes require authentication and network-ID validation. Connection writes and refresh requests also require the standard CSRF header.
+
+| Method | Endpoint suffix | Response | Notes |
+|---|---|---|---|
+| `GET` | *(none)* | `VirtualizationSnapshot` | Cached inventory, collection timestamps, source errors, and stale indicators; performs no upstream requests |
+| `GET` | `/connection` | `ConnectionSummary` | Configuration metadata only; saved secrets and PEM contents are never returned |
+| `PUT` | `/connection` | `ConnectionSummary` | `ConnectionUpdate`: HTTPS URL, token ID/secret, optional Proxmox CA, Docker enable/port and mutual-TLS credentials. Blank credentials retain saved values. Limit: `virtualization_connections`, 6/minute |
+| `POST` | `/refresh` | `VirtualizationSnapshot` | Body `{force: true}` for manual refresh, `{force: false}` for visible-page polling. Automatic requests have a 60-second cooldown; concurrent requests share one collection. Limit: `virtualization_refresh`, 20/minute |
+
+The backend refreshes configured networks every 600 seconds without a browser session. The visible page requests updates every 60 seconds and pauses requests in hidden tabs. See [[Configuration#virtualization]] for connection setup and persistence.
+
 ## Removed in 6.0
 
 | Route | Why |

@@ -186,6 +186,7 @@
 				: null,
 			...baseNavItems.slice(1, 4), // Devices, Eeros, Profiles
 			{ path: '/topology', label: 'Topology', icon: 'topology' as IconName }, // Topology at the end
+			{ path: '/virtualization', label: 'Virtualization', icon: 'server' as IconName },
 			baseNavItems[5] // Account
 		].filter(Boolean) as { path: string; label: string; icon: IconName }[]
 	);

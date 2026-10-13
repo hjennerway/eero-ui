@@ -37,9 +37,19 @@ from .deps import (
     get_eero_client,
     shutdown_client,
 )
-from .routes import account, auth, devices, eeros, metrics, networks, profiles
+from .routes import (
+    account,
+    auth,
+    devices,
+    eeros,
+    metrics,
+    networks,
+    profiles,
+    virtualization,
+)
 from .services.collector import MetricsCollector
 from .services.victoria import victoria_client
+from .services.virtualization import VirtualizationService
 
 
 def get_eero_client_version() -> str:
@@ -98,10 +108,22 @@ async def lifespan(app: FastAPI):
     )
     app.state.metrics_collector = collector
     collector_task = asyncio.create_task(collector.run_forever())
+    inventory = VirtualizationService(
+        Path(settings.cookie_file).parent / "virtualization", get_eero_client
+    )
+    inventory.load()
+    app.state.virtualization = inventory
+    inventory_task = asyncio.create_task(inventory.run_forever())
 
     yield
 
     _LOGGER.info("Shutting down Eero Dashboard Backend")
+    inventory_task.cancel()
+    try:
+        await inventory_task
+    except asyncio.CancelledError:
+        pass
+    await inventory.aclose()
     collector_task.cancel()
     try:
         await collector_task
@@ -408,6 +430,9 @@ async def eero_base_exception_handler(
 # Include API routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(networks.router, prefix="/api/networks", tags=["Networks"])
+app.include_router(
+    virtualization.router, prefix="/api/networks", tags=["Virtualization"]
+)
 app.include_router(devices.router, prefix="/api/devices", tags=["Devices"])
 app.include_router(eeros.router, prefix="/api/eeros", tags=["Eeros"])
 app.include_router(profiles.router, prefix="/api/profiles", tags=["Profiles"])
