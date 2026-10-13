@@ -13,6 +13,21 @@ import { server } from '../../../tests/mocks/server';
 import { api, ApiClientError } from './client';
 
 describe('api client', () => {
+	it('scopes device lookup to the selected network', async () => {
+		let requestedNetwork: string | null = null;
+		let connectedOnly: string | null = null;
+		server.use(
+			http.get('/api/devices', ({ request }) => {
+				const params = new URL(request.url).searchParams;
+				requestedNetwork = params.get('network_id');
+				connectedOnly = params.get('connected_only');
+				return HttpResponse.json([]);
+			})
+		);
+		await api.devices.list({ connectedOnly: true, networkId: 'network-123' });
+		expect(requestedNetwork).toBe('network-123');
+		expect(connectedOnly).toBe('true');
+	});
 	describe('error normalization', () => {
 		it('surfaces a plain string detail as-is', async () => {
 			server.use(

@@ -1,7 +1,9 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { get } from 'svelte/store';
 	import { api } from '$api/client';
 	import type {
+		DeviceSummary,
 		VPNConnection,
 		VPNConnectionUpdate,
 		VPNHistory,
@@ -14,8 +16,21 @@
 	import TimeRangeSelector from '$components/common/TimeRangeSelector.svelte';
 	import TimeSeriesChart from '$components/charts/TimeSeriesChart.svelte';
 	import { seriesColor } from '#lib/charts/defaults.js';
+	import { selectedNetworkId } from '#lib/stores/networks.js';
+	import { normalizeAddress } from '#lib/utils/ip-address.js';
 
 	let snapshot: VPNSnapshot | null = $state(null);
+	let clientDevices: DeviceSummary[] = $state([]);
+	let deviceGeneration = 0;
+	const clientDevicesByIp = $derived.by(() => {
+		const matches: Record<string, DeviceSummary | null> = {};
+		for (const device of clientDevices) {
+			if (!device.connected || !device.ip) continue;
+			const ip = normalizeClientIp(device.ip);
+			if (ip) matches[ip] = ip in matches ? null : device;
+		}
+		return matches;
+	});
 	let connection: VPNConnection | null = $state(null);
 	let history: VPNHistory | null = $state(null);
 	let loading = $state(true);
@@ -97,6 +112,20 @@
 			? '—'
 			: value.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 });
 	}
+	function normalizeClientIp(ip: string) {
+		return normalizeAddress(ip, ip.includes(':') ? 'ipv6' : 'ipv4');
+	}
+	async function loadClientDevices(networkId = get(selectedNetworkId)) {
+		const current = ++deviceGeneration;
+		if (!networkId) return;
+		try {
+			const result = await api.devices.list({ connectedOnly: true, networkId });
+			if (active && current === deviceGeneration && networkId === get(selectedNetworkId))
+				clientDevices = result;
+		} catch {
+			if (active && current === deviceGeneration) clientDevices = [];
+		}
+	}
 	function fillConnection(value: VPNConnection) {
 		connection = value;
 		enabled = value.enabled;
@@ -167,9 +196,10 @@
 				historyError = cause instanceof Error ? cause.message : 'Could not load VPN history.';
 		}
 	}
-	async function refresh() {
+	async function refresh(refreshDevices = true) {
 		if (refreshing || saving || controlling) return;
 		refreshing = true;
+		if (refreshDevices) void loadClientDevices();
 		try {
 			const result = await api.vpn.get();
 			if (!active) return;
@@ -241,6 +271,10 @@
 	}
 	onMount(() => {
 		active = true;
+		const unsubscribeNetwork = selectedNetworkId.subscribe((networkId) => {
+			clientDevices = [];
+			void loadClientDevices(networkId);
+		});
 		void api.vpn
 			.connection()
 			.then((value) => {
@@ -254,7 +288,7 @@
 					connectionError =
 						cause instanceof Error ? cause.message : 'Could not read connection settings.';
 			});
-		void refresh();
+		void refresh(false);
 		const timer = setInterval(() => {
 			if (document.visibilityState !== 'hidden') void refresh();
 		}, 30000);
@@ -264,6 +298,8 @@
 		document.addEventListener('visibilitychange', onVisibility);
 		return () => {
 			active = false;
+			unsubscribeNetwork();
+			deviceGeneration++;
 			historyGeneration++;
 			clearInterval(timer);
 			document.removeEventListener('visibilitychange', onVisibility);
@@ -506,7 +542,18 @@
 			{:else}
 				<ul class="client-ips" aria-label="Connected client IP addresses">
 					{#each snapshot.connected_client_ips as ip (ip)}
-						<li><code>{ip}</code></li>
+						{@const device = clientDevicesByIp[normalizeClientIp(ip) ?? '']}
+						<li>
+							{#if device?.id}
+								<a
+									href="/devices/{encodeURIComponent(device.id)}"
+									title="View {device.display_name || device.hostname || ip} device information"
+									><code>{ip}</code></a
+								>
+							{:else}
+								<code>{ip}</code>
+							{/if}
+						</li>
 					{/each}
 				</ul>
 			{/if}
@@ -636,6 +683,10 @@
 	.client-ips li {
 		padding: var(--space-2) 0;
 		overflow-wrap: anywhere;
+	}
+	.client-ips a:hover,
+	.client-ips a:focus-visible {
+		text-decoration: underline;
 	}
 	form,
 	.connection-fields label {

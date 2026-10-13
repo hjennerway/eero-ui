@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/svelte';
 import { tick } from 'svelte';
+import type { Writable } from 'svelte/store';
+import { selectedNetworkId } from '#lib/stores/networks.js';
 import Page from './+page.svelte';
 
 const calls = vi.hoisted(() => ({
@@ -9,9 +11,19 @@ const calls = vi.hoisted(() => ({
 	history: vi.fn(),
 	saveConnection: vi.fn(),
 	control: vi.fn(),
-	tunnels: vi.fn()
+	tunnels: vi.fn(),
+	devices: vi.fn()
 }));
-vi.mock('$api/client', () => ({ api: { vpn: calls } }));
+vi.mock('$api/client', () => ({ api: { vpn: calls, devices: { list: calls.devices } } }));
+vi.mock('#lib/stores/networks.js', async () => {
+	const { writable } = await import('svelte/store');
+	return { selectedNetworkId: writable<string | null>('net-1') };
+});
+const testNetworkId = selectedNetworkId as Writable<string | null>;
+const devices = [
+	{ id: 'device-9', ip: '192.168.4.9', display_name: 'Laptop', connected: true },
+	{ id: null, ip: '192.168.4.20', connected: true }
+];
 
 const snapshot = {
 	host: '192.168.4.10',
@@ -54,6 +66,7 @@ async function flush() {
 describe('VPN page', () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
+		testNetworkId.set('net-1');
 		visible('visible');
 		calls.get.mockReset().mockResolvedValue(snapshot);
 		calls.connection.mockReset().mockResolvedValue(connection);
@@ -65,10 +78,106 @@ describe('VPN page', () => {
 		});
 		calls.saveConnection.mockReset().mockResolvedValue(connection);
 		calls.control.mockReset().mockResolvedValue(snapshot);
+		calls.devices.mockReset().mockResolvedValue(devices);
 		calls.tunnels.mockReset().mockResolvedValue([
 			{ name: 'nordvpn', control_mode: 'openvpn' },
 			{ name: 'wg_vpn', control_mode: 'network' }
 		]);
+	});
+	it('links matched IPs to their device page and leaves unknown or unidentified IPs as text', async () => {
+		render(Page);
+		await flush();
+		expect(screen.getByRole('link', { name: '192.168.4.9' })).toHaveAttribute(
+			'href',
+			'/devices/device-9'
+		);
+		expect(screen.queryByRole('link', { name: '192.168.4.20' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('link', { name: '192.168.4.100' })).not.toBeInTheDocument();
+		expect(screen.getByText('192.168.4.20')).toBeInTheDocument();
+		expect(screen.getByText('192.168.4.100')).toBeInTheDocument();
+		expect(calls.devices).toHaveBeenCalledWith({ connectedOnly: true, networkId: 'net-1' });
+	});
+	it('matches equivalent IPv6 addresses', async () => {
+		calls.get.mockResolvedValue({ ...snapshot, connected_client_ips: ['fd00:4::2'] });
+		calls.devices.mockResolvedValue([
+			{ id: 'device-v6', ip: 'FD00:4:0:0:0:0:0:2', connected: true }
+		]);
+		render(Page);
+		await flush();
+		expect(screen.getByRole('link', { name: 'fd00:4::2' })).toHaveAttribute(
+			'href',
+			'/devices/device-v6'
+		);
+	});
+	it('avoids linking an IP shared by multiple devices or retained by an offline device', async () => {
+		calls.devices.mockResolvedValue([
+			devices[0],
+			{ id: 'duplicate-9', ip: '192.168.4.9', connected: true },
+			{ id: 'offline-100', ip: '192.168.4.100', connected: false }
+		]);
+		render(Page);
+		await flush();
+		expect(screen.queryByRole('link', { name: '192.168.4.9' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('link', { name: '192.168.4.100' })).not.toBeInTheDocument();
+	});
+	it('keeps VPN data visible if device lookup fails and retries on refresh', async () => {
+		calls.devices.mockRejectedValueOnce(new Error('Eero unavailable'));
+		render(Page);
+		await flush();
+		expect(screen.getByText('12.50')).toBeInTheDocument();
+		expect(screen.getByText('192.168.4.9')).toBeInTheDocument();
+		expect(screen.queryByRole('link', { name: '192.168.4.9' })).not.toBeInTheDocument();
+		await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+		await flush();
+		expect(screen.getByRole('link', { name: '192.168.4.9' })).toHaveAttribute(
+			'href',
+			'/devices/device-9'
+		);
+		calls.devices.mockRejectedValueOnce(new Error('Eero unavailable'));
+		await fireEvent.click(screen.getByRole('button', { name: 'Refresh' }));
+		await flush();
+		expect(screen.queryByRole('link', { name: '192.168.4.9' })).not.toBeInTheDocument();
+		expect(screen.getByText('192.168.4.9')).toBeInTheDocument();
+	});
+	it('updates a link when the device at an IP changes', async () => {
+		render(Page);
+		await flush();
+		calls.devices.mockResolvedValue([{ id: 'replacement-9', ip: '192.168.4.9', connected: true }]);
+		await vi.advanceTimersByTimeAsync(30000);
+		await flush();
+		expect(screen.getByRole('link', { name: '192.168.4.9' })).toHaveAttribute(
+			'href',
+			'/devices/replacement-9'
+		);
+	});
+	it('waits for a selected network before looking up devices', async () => {
+		testNetworkId.set(null);
+		render(Page);
+		await flush();
+		expect(calls.devices).not.toHaveBeenCalled();
+		expect(screen.getByText('192.168.4.9')).toBeInTheDocument();
+		testNetworkId.set('net-1');
+		await flush();
+		expect(screen.getByRole('link', { name: '192.168.4.9' })).toBeInTheDocument();
+	});
+	it('clears links on network changes and ignores results from the previous network', async () => {
+		let finish!: (value: typeof devices) => void;
+		calls.devices.mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+		render(Page);
+		await flush();
+		calls.devices.mockResolvedValue([{ id: 'net-2-device-9', ip: '192.168.4.9', connected: true }]);
+		testNetworkId.set('net-2');
+		await flush();
+		expect(calls.devices).toHaveBeenLastCalledWith({ connectedOnly: true, networkId: 'net-2' });
+		finish(devices);
+		await flush();
+		expect(screen.getByRole('link', { name: '192.168.4.9' })).toHaveAttribute(
+			'href',
+			'/devices/net-2-device-9'
+		);
+		testNetworkId.set(null);
+		await flush();
+		expect(screen.queryByRole('link', { name: '192.168.4.9' })).not.toBeInTheDocument();
 	});
 	afterEach(() => {
 		cleanup();

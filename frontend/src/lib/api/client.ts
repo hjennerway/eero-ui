@@ -1426,12 +1426,14 @@ export const api = {
 				connectedOnly?: boolean;
 				profileId?: string;
 				deviceIds?: string[];
+				networkId?: string;
 			} = {}
 		) =>
 			fetchWithHandling<import('./types').DeviceSummary[]>('/devices', {
 				params: {
 					refresh: options.refresh ?? false,
 					connected_only: options.connectedOnly ?? false,
+					...(options.networkId && { network_id: options.networkId }),
 					...(options.profileId && { profile_id: options.profileId }),
 					...(options.deviceIds && { device_ids: options.deviceIds.join(',') })
 				}
