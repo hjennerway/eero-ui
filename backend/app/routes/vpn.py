@@ -12,6 +12,8 @@ from ..deps import require_auth
 from ..services.vpn import (
     VPNConnection,
     VPNConnectionUpdate,
+    VPNControlError,
+    VPNControlRequest,
     VPNReadError,
     VPNService,
     VPNSnapshot,
@@ -37,6 +39,7 @@ async def snapshot(monitor: VPNService = Depends(service)):
         reading.stale = True
         reading.status = "unknown"
         reading.connected_clients = reading.download_mbps = reading.upload_mbps = None
+        reading.control_available = False
     return reading
 
 
@@ -109,3 +112,17 @@ async def history(
         ]
         for name, result in zip(names, results)
     }
+
+
+@router.post("/tunnel", response_model=VPNSnapshot)
+async def control_tunnel(
+    action: VPNControlRequest, monitor: VPNService = Depends(service)
+):
+    try:
+        return await monitor.control(action.action)
+    except VPNControlError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except VPNReadError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except (OSError, ValueError) as exc:
+        raise HTTPException(503, "Could not read VPN connection settings.") from exc

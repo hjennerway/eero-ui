@@ -82,6 +82,7 @@ export interface NASSnapshot {
 }
 
 export interface MQTTStatus extends Omit<MQTTSettingsUpdate, 'password'> {
+	vpn_topic?: string;
 	password_set: boolean;
 	connection_status: 'disabled' | 'connecting' | 'connected' | 'error';
 	message: string | null;
@@ -1890,6 +1891,8 @@ export interface VPNConnection {
 	port: number;
 	username: string;
 	interface: string;
+	control_mode: 'openvpn' | 'network';
+	control_target: string;
 	password_set: boolean;
 	host_key: string | null;
 }
@@ -1900,6 +1903,8 @@ export interface VPNConnectionUpdate {
 	port: number;
 	username: string;
 	interface: string;
+	control_mode: 'openvpn' | 'network';
+	control_target: string;
 	password: string | null;
 }
 
@@ -1921,6 +1926,7 @@ export interface VPNSnapshot {
 	warnings: string[];
 	history_error: string | null;
 	interval_seconds: number;
+	control_available: boolean;
 }
 
 export interface VPNHistory {

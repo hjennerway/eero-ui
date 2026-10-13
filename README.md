@@ -54,15 +54,19 @@ Writes that have not been verified end-to-end against a live eero network are hi
 
 Topology can also show managed switches, their ports and link speeds using read-only SNMP, LLDP neighbours and MAC learning. Verified with the Netgear GS110TP; see [Network switches](wiki/Configuration.md#network-switches) for setup and inference limits.
 
-The **MQTT** section connects to your broker and supports Home Assistant auto discovery for wired/wireless client counts, the latest download/upload speed test, QNAP disk health and power-on hours, and each volume's total size, available space and percentage used. See [MQTT setup](wiki/Configuration.md#mqtt-and-home-assistant).
-
-The **NAS** section reads QNAP disk status, SMART health summaries, temperatures and storage usage using read-only SNMP, with cached readings refreshed every five minutes in the background. Use **QTS connection** on the NAS page to test and save a login for power-on time in years, months, days and hours, plus estimated SSD life remaining. See [QNAP NAS setup](wiki/Configuration.md#qnap-nas-health-and-storage).
-
-The **VPN** section monitors the NordVPN tunnel on OpenWrt at `192.168.4.10`, recording connection status, active VPN clients and tunnel download/upload throughput every 30 seconds. It includes history charts and an SSH connection form. See [VPN setup](wiki/Configuration.md#vpn-monitoring).
+The **MQTT** section connects to your broker and supports Home Assistant auto discovery for wired/wireless client counts, the latest download/upload speed test, QNAP disk health and power-on hours, and each volume's total size, available space and percentage used. It also publishes VPN connection status, active clients and tunnel throughput, with **Connect** and **Disconnect** buttons in Home Assistant. See [MQTT setup](wiki/Configuration.md#mqtt-and-home-assistant).
 
 **Keyboard shortcuts** — `⌘K` / `Ctrl+K` opens the command palette, `?` shows the shortcuts help, `Esc` closes the open dialog or menu. Shortcuts never fire while you are typing in a field. Device filters (`q`, `status`, `conn`, `band`, `sort`, `dir`) are encoded in the URL, so a filtered view survives a refresh and can be shared.
 
 **Runtime dependencies added in 6.0** — exactly one: [`@tanstack/svelte-virtual`](https://github.com/TanStack/virtual) (MIT), which virtualizes the device table so a few hundred rows stay smooth. The UI fonts (Inter and JetBrains Mono, variable WOFF2) are self-hosted from `frontend/static/fonts/` under the SIL Open Font License; the licence text ships in `static/fonts/OFL.txt`. Nothing is fetched from a third party at runtime.
+
+### NAS, VPN and virtualization
+
+These optional integrations extend the dashboard with homelab monitoring and VPN tunnel control:
+
+- **NAS** — Monitor QNAP disk status, SMART health summaries, temperatures and capacity, plus volume usage, storage pool allocation and RAID status through SNMP. Cached readings refresh every **five minutes**, even when the page is closed. Use **QTS connection** to test and save a login for accumulated disk power-on time in years, months, days and hours, plus estimated SSD life remaining when supported. Configure devices with `EERO_DASHBOARD_NAS_FILE` using [`docs/nas.example.json`](docs/nas.example.json); see [QNAP NAS setup](wiki/Configuration.md#qnap-nas-health-and-storage).
+- **VPN** — Monitor a NordVPN tunnel on OpenWrt (default host `192.168.4.10`) through SSH. The server records tunnel connectivity, active clients with tracked VPN traffic and download/upload throughput every **30 seconds** in the built-in metrics store. View **1-hour, 6-hour and 24-hour** history charts, with unavailable or stale readings clearly identified. Use **Connection** to test and save SSH credentials, the monitored tunnel device and the OpenWrt tunnel type/name, then **Connect** or **Disconnect** from the page or MQTT. See [VPN setup](wiki/Configuration.md#vpn-monitoring).
+- **Virtualization** — Browse a Proxmox cluster's nodes, QEMU VMs and LXC guests in a searchable map, with node versions, guest status, reported OS information, IP addresses and links to matching eero devices. Optional Docker discovery adds engine versions and container names, states and health under each guest, with a filter to include stopped workloads. Use **Connection** to save a Proxmox HTTPS address and API token for the selected eero network; Docker inventory additionally requires authenticated TLS access to the existing guest engines. Inventory refreshes every **10 minutes** in the background and every **60 seconds** while the page is visible, with manual refresh and last known inventory retained on connection failure. See [Virtualization setup](wiki/Configuration.md#virtualization).
 
 ---
 
@@ -101,7 +105,7 @@ Full documentation lives in the **[Wiki](../../wiki)**:
 | 📖 Guide | Description |
 |----------|-------------|
 | [🚀 Installation](../../wiki/Installation) | Docker & manual setup |
-| [⚙️ Configuration](../../wiki/Configuration) | Environment variables, write gates, upgrading to 6.0 |
+| [⚙️ Configuration](../../wiki/Configuration) | Environment variables, NAS, VPN and virtualization setup, write gates, upgrading to 6.0 |
 | [🏗️ Architecture](../../wiki/Architecture) | Two-process container, metrics pipeline, auth, error mapping |
 | [📈 Metrics](../../wiki/Metrics) | The metric contract, collection, the optional exporter |
 | [📡 API Reference](../../wiki/API-Reference) | Every REST endpoint with gates, limits and status codes |

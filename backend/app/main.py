@@ -156,7 +156,12 @@ async def lifespan(app: FastAPI):
             else Path(settings.cookie_file).parent / "vpn.json"
         ),
         victoria_client,
+        publish_snapshot=(
+            app.state.mqtt_service.publish_vpn if app.state.mqtt_service else None
+        ),
     )
+    if app.state.mqtt_service:
+        app.state.mqtt_service.set_vpn_controller(app.state.vpn.control)
     vpn_task = asyncio.create_task(app.state.vpn.run_forever())
 
     try:

@@ -1,4 +1,4 @@
-"""Read-only OpenWrt tunnel monitoring, collected independently every 30 seconds."""
+"""OpenWrt tunnel monitoring and explicitly configured runtime controls."""
 
 import asyncio
 import base64
@@ -12,6 +12,7 @@ import shlex
 import socket
 import tempfile
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
@@ -35,6 +36,10 @@ class VPNConfig(BaseModel):
     )
     interface: str = Field(
         default="tun0", min_length=1, max_length=15, pattern=r"^[a-zA-Z0-9_.-]+$"
+    )
+    control_mode: Literal["openvpn", "network"] = "openvpn"
+    control_target: str = Field(
+        default="", max_length=64, pattern=r"^(?:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63})?$"
     )
     password: SecretStr | None = Field(default=None, max_length=4096)
     host_key: str | None = Field(default=None, max_length=128)
@@ -65,6 +70,8 @@ class VPNConnection(BaseModel):
     port: int
     username: str
     interface: str
+    control_mode: Literal["openvpn", "network"]
+    control_target: str
     password_set: bool
     host_key: str | None
 
@@ -89,10 +96,20 @@ class VPNSnapshot(BaseModel):
     warnings: list[str] = Field(default_factory=list)
     history_error: str | None = None
     interval_seconds: int = INTERVAL_SECONDS
+    control_available: bool = False
+
+
+class VPNControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    action: Literal["connect", "disconnect"]
 
 
 class VPNReadError(Exception):
     """A static, safe message suitable for display without leaking SSH details."""
+
+
+class VPNControlError(Exception):
+    """A tunnel action is unavailable or already in progress."""
 
 
 def save_config(path: Path, config: VPNConfig) -> None:
@@ -146,7 +163,9 @@ else printf 'MISSING\\n'; fi
 """
 
 
-def read_openwrt(config: VPNConfig) -> tuple[dict[str, str], str]:
+def _run_openwrt(
+    config: VPNConfig, command: str, *, control: bool = False
+) -> tuple[str, str]:
     """Bounded SSH session with host-key pinning before sending credentials."""
     try:
         with socket.create_connection((config.host, config.port), timeout=4) as sock:
@@ -173,36 +192,37 @@ def read_openwrt(config: VPNConfig) -> tuple[dict[str, str], str]:
                 with transport.open_session(timeout=4) as channel:
                     channel.settimeout(4)
                     channel.set_combine_stderr(True)
-                    channel.exec_command(collector_command(config.interface))
+                    channel.exec_command(command)
                     chunks: list[bytes] = []
                     size = 0
-                    deadline = time.monotonic() + 7
+                    deadline = time.monotonic() + (20 if control else 7)
                     while True:
+                        if time.monotonic() >= deadline:
+                            raise VPNReadError(
+                                "The OpenWrt tunnel command timed out. Refresh status before trying again."
+                                if control
+                                else "The OpenWrt monitoring command timed out."
+                            )
                         if channel.recv_ready():
                             chunk = channel.recv(65536)
                             size += len(chunk)
-                            if size > 4 * 1024 * 1024:
+                            if size > (4096 if control else 4 * 1024 * 1024):
                                 raise VPNReadError(
-                                    "OpenWrt returned too much monitoring data."
+                                    "OpenWrt returned too much command data."
                                 )
                             chunks.append(chunk)
                         elif channel.exit_status_ready():
                             break
-                        elif time.monotonic() >= deadline:
-                            raise VPNReadError(
-                                "The OpenWrt monitoring command timed out."
-                            )
                         else:
                             time.sleep(0.01)
                     if channel.recv_exit_status() != 0:
                         raise VPNReadError(
-                            "OpenWrt could not run the monitoring commands."
+                            "OpenWrt could not control this tunnel. Check its name, enabled configuration and SSH permissions."
+                            if control
+                            else "OpenWrt could not run the monitoring commands."
                         )
         output = b"".join(chunks).decode("utf-8", errors="replace")
-        sections = re.split(r"\n__VPN_([A-Z]+)__\n", output)
-        return {
-            sections[i]: sections[i + 1].strip() for i in range(1, len(sections), 2)
-        }, fingerprint
+        return output, fingerprint
     except paramiko.AuthenticationException as exc:
         raise VPNReadError(
             "SSH login failed. Check the OpenWrt username and password in Connection."
@@ -211,6 +231,53 @@ def read_openwrt(config: VPNConfig) -> tuple[dict[str, str], str]:
         raise VPNReadError(
             "Cannot reach OpenWrt over SSH. Check its address, SSH service and network access."
         ) from exc
+
+
+def read_openwrt(config: VPNConfig) -> tuple[dict[str, str], str]:
+    output, fingerprint = _run_openwrt(config, collector_command(config.interface))
+    sections = re.split(r"\n__VPN_([A-Z]+)__\n", output)
+    return {
+        sections[i]: sections[i + 1].strip() for i in range(1, len(sections), 2)
+    }, fingerprint
+
+
+def control_command(config: VPNConfig, action: Literal["connect", "disconnect"]) -> str:
+    """Target one configured VPN; never restart networking or change autostart."""
+    target = config.control_target
+    if not re.fullmatch(r"[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,63}", target):
+        raise VPNControlError("Set the tunnel type and name in Connection first.")
+    if action not in ("connect", "disconnect"):
+        raise VPNControlError("Choose connect or disconnect.")
+    name = shlex.quote(target)
+    if config.control_mode == "network":
+        method = "up" if action == "connect" else "down"
+        return f"""[ \"$(uci -q get network.{name})\" = interface ] || exit 1
+case \"$(uci -q get network.{name}.proto)\" in wireguard|openvpn) ;; *) exit 1 ;; esac
+ubus call network.interface.{name} {method} '{{}}' >/dev/null 2>&1
+"""
+    method = "start" if action == "connect" else "stop"
+    enabled_check = (
+        f'[ "$(uci -q get openvpn.{name}.enabled)" = 1 ] || '
+        f'[ "$(uci -q get openvpn.{name}.enable)" = 1 ] || exit 1'
+        if action == "connect"
+        else ":"
+    )
+    return f"""[ -x /etc/init.d/openvpn ] || exit 1
+if [ \"$(uci -q get openvpn.{name})\" = openvpn ]; then
+  {enabled_check}
+else [ -f /etc/openvpn/{name}.conf ] || exit 1; fi
+if /etc/init.d/openvpn running {name} >/dev/null 2>&1; then
+  {f'/etc/init.d/openvpn {method} {name} >/dev/null 2>&1' if action == 'disconnect' else ':'}
+else
+  {f'/etc/init.d/openvpn {method} {name} >/dev/null 2>&1' if action == 'connect' else ':'}
+fi
+"""
+
+
+def control_openwrt(
+    config: VPNConfig, action: Literal["connect", "disconnect"]
+) -> None:
+    _run_openwrt(config, control_command(config, action), control=True)
 
 
 def parse_reading(
@@ -294,10 +361,17 @@ def parse_reading(
 
 
 class VPNService:
-    def __init__(self, path: Path, victoria: VictoriaMetricsClient):
+    def __init__(
+        self,
+        path: Path,
+        victoria: VictoriaMetricsClient,
+        publish_snapshot: Callable[[VPNSnapshot], None] | None = None,
+    ):
         self.path = path
         self.victoria = victoria
         self._lock = asyncio.Lock()
+        self._control_lock = asyncio.Lock()
+        self._publish_snapshot = publish_snapshot
         self._baseline: tuple | None = None
         self.snapshot = VPNSnapshot()
 
@@ -336,6 +410,37 @@ class VPNService:
             )
             return connection_status(config)
 
+    async def control(self, action: Literal["connect", "disconnect"]) -> VPNSnapshot:
+        if self._control_lock.locked():
+            raise VPNControlError("A tunnel action is already in progress.")
+        async with self._control_lock:
+            async with self._lock:
+                config = await asyncio.to_thread(read_config, self.path)
+                if not config.enabled:
+                    raise VPNControlError("Enable VPN monitoring in Connection first.")
+                if not config.host_key:
+                    raise VPNControlError(
+                        "Test and save the SSH connection before controlling the tunnel."
+                    )
+                # Validate before opening SSH, and reuse the pinned host key.
+                control_command(config, action)
+                try:
+                    await asyncio.to_thread(control_openwrt, config, action)
+                finally:
+                    # A command may have completed even if SSH was interrupted.
+                    self._baseline = None
+                    self.snapshot = VPNSnapshot(
+                        host=config.host,
+                        interface=config.interface,
+                        error="Tunnel status is being refreshed after a control request.",
+                    )
+                    self._publish()
+            return await self.collect_once()
+
+    def _publish(self) -> None:
+        if self._publish_snapshot:
+            self._publish_snapshot(self.snapshot)
+
     async def collect_once(self) -> VPNSnapshot:
         async with self._lock:
             try:
@@ -348,12 +453,14 @@ class VPNService:
                         status="disabled",
                         stale=False,
                     )
+                    self._publish()
                     return self.snapshot
                 data, fingerprint = await asyncio.to_thread(read_openwrt, config)
                 snapshot, baseline = parse_reading(config, data)
                 if not config.host_key:
                     config.host_key = fingerprint
                     await asyncio.to_thread(save_config, self.path, config)
+                snapshot.control_available = bool(config.control_target)
                 if baseline and self._baseline and baseline[:2] == self._baseline[:2]:
                     elapsed = baseline[2] - self._baseline[2]
                     rx_delta = baseline[3] - self._baseline[3]
@@ -391,6 +498,7 @@ class VPNService:
                 )
             self.snapshot = snapshot
             await self._write(snapshot)
+            self._publish()
             return snapshot
 
     async def _write(self, snapshot: VPNSnapshot) -> None:

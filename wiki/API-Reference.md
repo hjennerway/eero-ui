@@ -260,6 +260,20 @@ All routes require authentication and network-ID validation. Connection writes a
 
 The backend refreshes configured networks every 600 seconds without a browser session. The visible page requests updates every 60 seconds and pauses requests in hidden tabs. See [[Configuration#virtualization]] for connection setup and persistence.
 
+## VPN (`/api/vpn`)
+
+All routes require authentication. Writes require the standard `X-Requested-With: eero-ui` CSRF header. SSH credentials are never returned.
+
+| Method | Endpoint suffix | Request | Response / notes |
+|---|---|---|---|
+| `GET` | *(none)* | — | `VPNSnapshot`: cached status and traffic, timestamps, stale indicators and `control_available` |
+| `GET` | `/connection` | — | `VPNConnection`: monitoring settings, `control_mode`, `control_target`, pinned host key and whether a password is saved |
+| `PUT` | `/connection` | `VPNConnectionUpdate` | Tests SSH before saving; `control_mode` is `openvpn` (default) or `network`, and `control_target` defaults to empty (monitoring only). A blank password retains the saved password on the same host. |
+| `POST` | `/tunnel` | `{action: "connect"}` or `{action: "disconnect"}` | Sends one runtime action to the saved target and returns a newly collected `VPNSnapshot`. No automatic retries. `409` for missing control settings, disabled monitoring, an unpinned SSH connection or an action in progress; `422` for an invalid request or SSH/control failure; `503` for unreadable settings. Command acceptance does not imply the returned status is connected. |
+| `GET` | `/history` | Query `range=1h` / `6h` / `24h` | Recorded status, client count and download/upload series |
+
+See [[Configuration#vpn-monitoring]] for tunnel names and [[Configuration#mqtt-and-home-assistant]] for MQTT state, discovery and commands.
+
 ## Removed in 6.0
 
 | Route | Why |

@@ -75,7 +75,10 @@ async def test_vpn_collector_stops_before_the_metrics_store_closes(monkeypatch):
     call_order = []
     vpn_collector = FakeCollector()
     vpn_collector.call_order = call_order
-    monkeypatch.setattr(main_module, "VPNService", lambda *args: vpn_collector)
+    vpn_collector.control = _noop_async
+    monkeypatch.setattr(
+        main_module, "VPNService", lambda *args, **kwargs: vpn_collector
+    )
     monkeypatch.setattr(
         main_module, "MetricsCollector", lambda *args, **kwargs: FakeCollector()
     )
@@ -103,6 +106,8 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
         start=lambda: call_order.append("mqtt_started"),
         publish_samples=lambda samples: None,
         publish_nas=lambda snapshots: None,
+        publish_vpn=lambda snapshot: None,
+        set_vpn_controller=lambda controller: None,
         close=close_mqtt,
     )
     nas_started = asyncio.Event()

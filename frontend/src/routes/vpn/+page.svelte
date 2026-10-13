@@ -15,6 +15,9 @@
 	let loading = $state(true);
 	let refreshing = $state(false);
 	let saving = $state(false);
+	let controlling: 'connect' | 'disconnect' | null = $state(null);
+	let controlError: string | null = $state(null);
+	let controlMessage: string | null = $state(null);
 	let error: string | null = $state(null);
 	let historyError: string | null = $state(null);
 	let connectionError: string | null = $state(null);
@@ -24,10 +27,15 @@
 	let port = $state(22);
 	let username = $state('root');
 	let tunnelInterface = $state('tun0');
+	let controlMode: 'openvpn' | 'network' = $state('openvpn');
+	let controlTarget = $state('');
 	let password = $state('');
 	let timeRange: '1h' | '6h' | '24h' = $state('1h');
 	let active = false;
 	let historyGeneration = 0;
+	const canControl = $derived.by(() =>
+		Boolean(connection?.enabled && connection.control_target && connection.host_key)
+	);
 	const ranges: { value: '1h' | '6h' | '24h'; label: string }[] = [
 		{ value: '1h', label: '1h' },
 		{ value: '6h', label: '6h' },
@@ -79,6 +87,8 @@
 		port = value.port;
 		username = value.username;
 		tunnelInterface = value.interface;
+		controlMode = value.control_mode;
+		controlTarget = value.control_target;
 		password = '';
 	}
 	async function loadHistory() {
@@ -95,7 +105,7 @@
 		}
 	}
 	async function refresh() {
-		if (refreshing || saving) return;
+		if (refreshing || saving || controlling) return;
 		refreshing = true;
 		try {
 			const result = await api.vpn.get();
@@ -125,7 +135,7 @@
 	}
 	async function saveConnection(event: SubmitEvent) {
 		event.preventDefault();
-		if (saving) return;
+		if (saving || controlling || refreshing) return;
 		saving = true;
 		connectionError = null;
 		const update: VPNConnectionUpdate = {
@@ -134,6 +144,8 @@
 			port,
 			username,
 			interface: tunnelInterface,
+			control_mode: controlMode,
+			control_target: controlTarget.trim(),
 			password: password || null
 		};
 		password = '';
@@ -149,6 +161,24 @@
 					cause instanceof Error ? cause.message : 'Could not save the SSH connection.';
 		} finally {
 			if (active) saving = false;
+		}
+		if (active) await refresh();
+	}
+	async function controlTunnel(action: 'connect' | 'disconnect') {
+		if (!canControl || controlling || refreshing || saving) return;
+		controlling = action;
+		controlError = controlMessage = null;
+		try {
+			const result = await api.vpn.control(action);
+			if (!active) return;
+			snapshot = result;
+			error = null;
+			controlMessage = `${action === 'connect' ? 'Connect' : 'Disconnect'} requested. Status updates every 30 seconds.`;
+		} catch (cause) {
+			if (active)
+				controlError = cause instanceof Error ? cause.message : 'Could not control the tunnel.';
+		} finally {
+			if (active) controlling = null;
 		}
 		if (active) await refresh();
 	}
@@ -192,18 +222,38 @@
 		</div>
 		<div class="header-actions">
 			<Button
+				variant="primary"
+				loading={controlling === 'connect'}
+				disabled={!canControl || saving || refreshing || controlling !== null}
+				onclick={() => void controlTunnel('connect')}>Connect</Button
+			>
+			<Button
+				loading={controlling === 'disconnect'}
+				disabled={!canControl || saving || refreshing || controlling !== null}
+				onclick={() => void controlTunnel('disconnect')}>Disconnect</Button
+			>
+			<Button
 				icon="settings"
+				disabled={saving || controlling !== null}
 				onclick={() => {
 					showConnection = !showConnection;
 					password = '';
 				}}>Connection</Button
 			>
-			<Button icon="refresh" loading={refreshing} disabled={saving} onclick={() => void refresh()}
-				>Refresh</Button
+			<Button
+				icon="refresh"
+				loading={refreshing}
+				disabled={saving || controlling !== null}
+				onclick={() => void refresh()}>Refresh</Button
 			>
 		</div>
 	</header>
 	<p class="schedule">Recorded every 30 seconds, including when this page is closed.</p>
+	{#if connection && !connection.control_target}<p class="text-muted">
+			Set the tunnel type and name in Connection to enable Connect and Disconnect.
+		</p>{/if}
+	{#if controlMessage}<p role="status" class="text-muted">{controlMessage}</p>{/if}
+	{#if controlError}<p class="error-banner" role="alert">{controlError}</p>{/if}
 	{#if error}<p class="error-banner" role="alert">{error}</p>{/if}
 	{#if showConnection}
 		<Card title="OpenWrt SSH connection">
@@ -252,7 +302,30 @@
 							required
 						/></label
 					>
+					<label for="vpn-control-mode"
+						>Tunnel type<select id="vpn-control-mode" class="input" bind:value={controlMode}>
+							<option value="openvpn">OpenVPN service</option>
+							<option value="network">OpenWrt network interface (WireGuard / OpenVPN)</option>
+						</select></label
+					>
+					<label for="vpn-control-target"
+						>Tunnel name<input
+							id="vpn-control-target"
+							class="input"
+							bind:value={controlTarget}
+							maxlength="64"
+							pattern="[a-zA-Z0-9_][a-zA-Z0-9_.-]*"
+							placeholder="Optional, e.g. nordvpn"
+							aria-describedby="vpn-control-help"
+						/></label
+					>
 				</div>
+				<p id="vpn-control-help" class="text-muted">
+					{controlMode === 'openvpn'
+						? 'Use the OpenVPN configuration name shown in OpenWrt.'
+						: 'Use the VPN network interface name shown in OpenWrt.'} Leave blank for monitoring only.
+					Disconnecting affects clients using this tunnel.
+				</p>
 				<label class="enabled-toggle"
 					><input type="checkbox" bind:checked={enabled} /> Enable VPN monitoring</label
 				>
@@ -260,7 +333,12 @@
 					The dashboard tests SSH before saving. Passwords stay on the dashboard server.
 				</p>
 				{#if connectionError}<p role="alert" class="error-banner">{connectionError}</p>{/if}
-				<Button type="submit" variant="primary" loading={saving}>Test and save</Button>
+				<Button
+					type="submit"
+					variant="primary"
+					loading={saving}
+					disabled={refreshing || controlling !== null}>Test and save</Button
+				>
 			</form>
 		</Card>
 	{/if}

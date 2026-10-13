@@ -114,6 +114,7 @@ export const handlers = [
 		HttpResponse.json({
 			host: '192.168.4.10',
 			interface: 'tun0',
+			control_available: true,
 			provider: 'NordVPN',
 			status: 'connected',
 			reachable: true,
@@ -138,6 +139,8 @@ export const handlers = [
 			port: 22,
 			username: 'root',
 			interface: 'tun0',
+			control_mode: 'openvpn',
+			control_target: 'nordvpn',
 			password_set: true,
 			host_key: 'SHA256:fixture'
 		})
@@ -149,10 +152,29 @@ export const handlers = [
 			port: 22,
 			username: 'root',
 			interface: 'tun0',
+			control_mode: 'openvpn',
+			control_target: 'nordvpn',
 			password_set: true,
 			host_key: 'SHA256:fixture'
 		})
 	),
+	http.post('/api/vpn/tunnel', async ({ request }) => {
+		const { action } = (await request.json()) as { action: string };
+		return HttpResponse.json({
+			host: '192.168.4.10',
+			interface: 'tun0',
+			provider: 'NordVPN',
+			status: action === 'disconnect' ? 'disconnected' : 'connected',
+			reachable: true,
+			stale: false,
+			control_available: true,
+			connected_clients: 0,
+			download_mbps: 0,
+			upload_mbps: 0,
+			warnings: [],
+			interval_seconds: 30
+		});
+	}),
 	http.get('/api/vpn/history', () =>
 		HttpResponse.json({
 			download_mbps: [],

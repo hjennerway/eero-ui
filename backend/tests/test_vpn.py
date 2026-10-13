@@ -213,6 +213,7 @@ async def test_invalid_settings_do_not_echo_credentials(auth_client, monitor, pa
         ("GET", "/api/vpn/history"),
         ("GET", "/api/vpn/connection"),
         ("PUT", "/api/vpn/connection"),
+        ("POST", "/api/vpn/tunnel"),
     ],
 )
 async def test_all_routes_require_login(async_client, monitor, method, url):
@@ -264,3 +265,179 @@ async def test_background_collector_uses_30_second_cadence(monitor, monkeypatch)
     with pytest.raises(asyncio.CancelledError):
         await monitor.run_forever()
     monitor.collect_once.assert_awaited_once()
+
+
+@pytest.mark.parametrize("mode", ["openvpn", "network"])
+@pytest.mark.parametrize("action", ["connect", "disconnect"])
+async def test_tunnel_control_uses_saved_target_and_refreshes_real_status(
+    auth_client, monitor, monkeypatch, mode, action
+):
+    config = vpn.VPNConfig(
+        password="private-password",
+        host_key="SHA256:fixture",
+        control_mode=mode,
+        control_target="nordvpn",
+    )
+    vpn.save_config(monitor.path, config)
+    monitor._baseline = ("boot-a", 7, 100, 1, 1)
+    remote = MagicMock()
+    monkeypatch.setattr(vpn, "control_openwrt", remote)
+    monkeypatch.setattr(
+        vpn, "read_openwrt", lambda config: (reading(present=False), "SHA256:fixture")
+    )
+    response = await auth_client.post("/api/vpn/tunnel", json={"action": action})
+    assert response.status_code == 200
+    # Successful command delivery does not mean a handshake has completed.
+    assert response.json()["status"] == "disconnected"
+    assert response.json()["control_available"]
+    saved, requested = remote.call_args.args
+    assert saved == config and requested == action
+    assert "private-password" not in response.text
+    assert monitor._baseline is None
+    assert vpn.read_config(monitor.path) == config
+
+
+@pytest.mark.parametrize(
+    "config",
+    [
+        vpn.VPNConfig(
+            enabled=False, control_target="nordvpn", host_key="SHA256:fixture"
+        ),
+        vpn.VPNConfig(control_target="nordvpn"),
+        vpn.VPNConfig(host_key="SHA256:fixture"),
+    ],
+)
+async def test_unconfigured_controls_never_open_ssh(
+    auth_client, monitor, monkeypatch, config
+):
+    vpn.save_config(monitor.path, config)
+    remote = MagicMock()
+    monkeypatch.setattr(vpn, "control_openwrt", remote)
+    response = await auth_client.post("/api/vpn/tunnel", json={"action": "disconnect"})
+    assert response.status_code == 409
+    remote.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"action": "restart"},
+        {"action": "connect; reboot"},
+        {"action": "connect", "target": "other-tunnel"},
+    ],
+)
+async def test_control_payload_cannot_override_saved_tunnel(
+    auth_client, monitor, monkeypatch, payload
+):
+    remote = MagicMock()
+    monkeypatch.setattr(vpn, "control_openwrt", remote)
+    assert (await auth_client.post("/api/vpn/tunnel", json=payload)).status_code == 422
+    remote.assert_not_called()
+
+
+async def test_control_requires_csrf_header(auth_client, monitor, monkeypatch):
+    remote = MagicMock()
+    monkeypatch.setattr(vpn, "control_openwrt", remote)
+    response = await auth_client.post(
+        "/api/vpn/tunnel", json={"action": "connect"}, headers={"X-Requested-With": ""}
+    )
+    assert response.status_code == 403
+    remote.assert_not_called()
+
+
+async def test_control_failure_invalidates_old_measurements(
+    auth_client, monitor, monkeypatch
+):
+    vpn.save_config(
+        monitor.path, vpn.VPNConfig(control_target="nordvpn", host_key="SHA256:fixture")
+    )
+    monitor.snapshot, monitor._baseline = vpn.parse_reading(vpn.VPNConfig(), reading())
+    publisher = MagicMock()
+    monitor._publish_snapshot = publisher
+
+    def failed(config, action):
+        raise vpn.VPNReadError("Cannot reach OpenWrt.")
+
+    monkeypatch.setattr(vpn, "control_openwrt", failed)
+    response = await auth_client.post("/api/vpn/tunnel", json={"action": "disconnect"})
+    assert response.status_code == 422 and "Cannot reach OpenWrt" in response.text
+    assert monitor.snapshot.stale and monitor.snapshot.status == "unknown"
+    assert monitor.snapshot.connected_clients is monitor.snapshot.download_mbps is None
+    assert monitor._baseline is None
+    publisher.assert_called_once()
+
+
+async def test_concurrent_controls_are_rejected(monitor, monkeypatch):
+    vpn.save_config(
+        monitor.path, vpn.VPNConfig(control_target="nordvpn", host_key="SHA256:fixture")
+    )
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def collecting():
+        started.set()
+        await release.wait()
+        return monitor.snapshot
+
+    monkeypatch.setattr(vpn, "control_openwrt", MagicMock())
+    monitor.collect_once = collecting
+    pending = asyncio.create_task(monitor.control("connect"))
+    await started.wait()
+    with pytest.raises(vpn.VPNControlError, match="already in progress"):
+        await monitor.control("disconnect")
+    release.set()
+    await pending
+
+
+def test_control_host_key_is_checked_before_credentials_or_command(monkeypatch):
+    transport = MagicMock()
+    transport.__enter__.return_value = transport
+    transport.get_remote_server_key.return_value.asbytes.return_value = b"changed-key"
+    monkeypatch.setattr(vpn.paramiko, "Transport", lambda sock: transport)
+    monkeypatch.setattr(vpn.socket, "create_connection", MagicMock())
+    with pytest.raises(vpn.VPNReadError, match="host key changed"):
+        vpn.control_openwrt(
+            vpn.VPNConfig(
+                control_target="nordvpn", host_key="SHA256:expected", password="private"
+            ),
+            "disconnect",
+        )
+    transport.auth_password.assert_not_called()
+    transport.open_session.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "target", ["", "-a", "../vpn", "vpn; reboot", "vpn$(reboot)", "vpn\nreboot"]
+)
+def test_command_refuses_unsafe_or_empty_tunnel_names(target):
+    # Also enforce validation at the command boundary, even for an unvalidated model.
+    config = vpn.VPNConfig.model_construct(control_target=target)
+    with pytest.raises(vpn.VPNControlError):
+        vpn.control_command(config, "connect")
+
+
+def test_commands_are_scoped_and_network_mode_refuses_non_vpn_protocols():
+    config = vpn.VPNConfig(control_target="nordvpn")
+    assert "/etc/init.d/openvpn start nordvpn" in vpn.control_command(config, "connect")
+    assert "/etc/init.d/openvpn stop nordvpn" in vpn.control_command(
+        config, "disconnect"
+    )
+    config.control_mode = "network"
+    command = vpn.control_command(config, "disconnect")
+    assert "wireguard|openvpn" in command
+    assert "ubus call network.interface.nordvpn down '{}'" in command
+    assert "restart" not in command and "uci set" not in command
+
+
+async def test_collections_publish_disabled_and_live_readings(monitor, monkeypatch):
+    publisher = MagicMock()
+    monitor._publish_snapshot = publisher
+    vpn.save_config(monitor.path, vpn.VPNConfig(enabled=False))
+    await monitor.collect_once()
+    assert publisher.call_args.args[0].status == "disabled"
+    vpn.save_config(monitor.path, vpn.VPNConfig(control_target="nordvpn"))
+    monkeypatch.setattr(
+        vpn, "read_openwrt", lambda config: (reading(), "SHA256:fixture")
+    )
+    await monitor.collect_once()
+    assert publisher.call_args.args[0].status == "connected"
+    assert publisher.call_args.args[0].control_available

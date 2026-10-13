@@ -245,6 +245,19 @@
 				unsupported readings remain unknown. Find these sensors under the NAS device in Home
 				Assistant.
 			</p>
+			<p class="text-muted">
+				VPN connection status, active clients and download/upload throughput publish every 30
+				seconds. Home Assistant also gets Connect and Disconnect buttons. Set the tunnel type and
+				name in VPN Connection to enable them.
+			</p>
+			{#if status.vpn_topic}
+				<p class="text-muted">VPN readings: <code>{status.vpn_topic}/state</code></p>
+				<p class="text-muted">
+					Publish <code>connect</code> or <code>disconnect</code> to
+					<code>{status.vpn_topic}/command</code>
+					without retaining the message. Results: <code>{status.vpn_topic}/result</code>.
+				</p>
+			{/if}
 		</Card>
 	{/if}
 </div>
