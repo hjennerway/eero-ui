@@ -42,6 +42,18 @@ describe('api client handler coverage', () => {
 		const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
 		const calls: Array<() => Promise<unknown>> = [
+			() => api.vpn.get(),
+			() => api.vpn.connection(),
+			() => api.vpn.history(),
+			() =>
+				api.vpn.saveConnection({
+					enabled: true,
+					host: '192.168.4.10',
+					port: 22,
+					username: 'root',
+					interface: 'tun0',
+					password: null
+				}),
 			() => api.nas.list('network-123'),
 			() => api.discovery.get(),
 			() => api.switches.list(),
@@ -342,6 +354,6 @@ describe('api client handler coverage', () => {
 		// Guards the guard: if client.ts grows a new method, this fails until
 		// the call list above is updated too, instead of silently covering
 		// only a subset forever.
-		expect(countLeafMethods(api)).toBe(151);
+		expect(countLeafMethods(api)).toBe(155);
 	});
 });

@@ -61,6 +61,7 @@ Thumbs.db
 session.json
 mqtt.json
 nas.json
+vpn.json
 
 # Coverage
 htmlcov/

@@ -58,6 +58,8 @@ The **MQTT** section connects to your broker and supports Home Assistant auto di
 
 The **NAS** section reads QNAP disk status, SMART health summaries, temperatures and storage usage using read-only SNMP, with cached readings refreshed every five minutes in the background. Use **QTS connection** on the NAS page to test and save a login for power-on time in years, months, days and hours, plus estimated SSD life remaining. See [QNAP NAS setup](wiki/Configuration.md#qnap-nas-health-and-storage).
 
+The **VPN** section monitors the NordVPN tunnel on OpenWrt at `192.168.4.10`, recording connection status, active VPN clients and tunnel download/upload throughput every 30 seconds. It includes history charts and an SSH connection form. See [VPN setup](wiki/Configuration.md#vpn-monitoring).
+
 **Keyboard shortcuts** — `⌘K` / `Ctrl+K` opens the command palette, `?` shows the shortcuts help, `Esc` closes the open dialog or menu. Shortcuts never fire while you are typing in a field. Device filters (`q`, `status`, `conn`, `band`, `sort`, `dir`) are encoded in the URL, so a filtered view survives a refresh and can be shared.
 
 **Runtime dependencies added in 6.0** — exactly one: [`@tanstack/svelte-virtual`](https://github.com/TanStack/virtual) (MIT), which virtualizes the device table so a few hundred rows stay smooth. The UI fonts (Inter and JetBrains Mono, variable WOFF2) are self-hosted from `frontend/static/fonts/` under the SIL Open Font License; the licence text ships in `static/fonts/OFL.txt`. Nothing is fetched from a third party at runtime.

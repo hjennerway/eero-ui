@@ -82,6 +82,16 @@ def _isolate_preferred_network_file(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_vpn_connection(tmp_path, monkeypatch):
+    """Lifespan tests must never initiate SSH to a real LAN device."""
+    from app.config import settings
+
+    path = tmp_path / "vpn.json"
+    path.write_text('{"enabled": false}', encoding="utf-8")
+    monkeypatch.setattr(settings, "vpn_file", str(path))
+
+
+@pytest.fixture(autouse=True)
 def _reset_networks_module_state():
     """Reset the other two module-level, process-global dicts on
     ``app.routes.networks`` before and after every test.
