@@ -1,0 +1,433 @@
+# Infrastructure dashboard — dash-proxmox2.yaml
+# Existing compute sensors plus MQTT QNAP and Eero sensors.
+# Frigate archive gauge uses the QNAP CCTV volume.
+# History depends on Recorder data retained by Home Assistant.
+path: "nas"
+title: "NAS"
+icon: "mdi:nas"
+type: "custom:grid-layout"
+layout:
+  grid-template-columns: "repeat(4, minmax(0, 1fr))"
+  grid-template-areas: |
+    "pve1 pve2 homeassistant frigate"
+    "ubuntuarr landing kitchen network"
+    "nasheader nasheader nasheader nasheader"
+    "media cctv backups health"
+    "storage storage temperature temperature"
+    "throughput throughput throughput throughput"
+  grid-column-gap: "16px"
+  grid-row-gap: "0 24px"
+  margin: "16px"
+  mediaquery:
+    "(max-width: 700px)":
+      grid-template-columns: "minmax(0, 1fr)"
+      grid-template-areas: |
+        "pve1"
+        "pve2"
+        "homeassistant"
+        "frigate"
+        "ubuntuarr"
+        "landing"
+        "kitchen"
+        "network"
+        "nasheader"
+        "media"
+        "cctv"
+        "backups"
+        "health"
+        "storage"
+        "temperature"
+        "throughput"
+      margin: "8px"
+    "(max-width: 1700px)":
+      grid-template-columns: "repeat(2, minmax(0, 1fr))"
+      grid-template-areas: |
+        "pve1 pve2"
+        "homeassistant frigate"
+        "ubuntuarr network"
+        "landing kitchen"
+        "nasheader nasheader"
+        "media cctv"
+        "backups health"
+        "storage storage"
+        "temperature temperature"
+        "throughput throughput"
+cards:
+
+  - type: "vertical-stack"
+    view_layout:
+      grid-area: "media"
+    cards:
+      - type: "custom:bubble-card"
+        card_type: "separator"
+        name: "Media"
+        icon: "mdi:movie-open"
+      - type: "gauge"
+        entity: "sensor.qnap_tvs_473e_media_used_capacity"
+        name: "Used capacity"
+        min: 0
+        max: 100
+        needle: false
+        severity:
+          green: 0
+          yellow: 75
+          red: 90
+        tap_action:
+          action: "more-info"
+        card_mod:
+          style: "ha-card { height: 180px; border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; --gauge-color: #42c6b7; }"
+      - type: "markdown"
+        content: |
+          {% macro size(id) -%}{%- set value = states(id) -%}{%- if is_number(value) -%}{%- set bytes = value | float -%}{%- if bytes >= 1099511627776 -%}{{ (bytes / 1099511627776) | round(2) }} TiB{%- else -%}{{ (bytes / 1073741824) | round(1) }} GiB{%- endif -%}{%- else -%}Unavailable{%- endif -%}{%- endmacro %}
+          **{{ size('sensor.qnap_tvs_473e_media_used_space') }} used** / {{ size('sensor.qnap_tvs_473e_media_total_capacity') }}
+          
+          **{{ size('sensor.qnap_tvs_473e_media_free_space') }} free**
+          
+          Volume: {{ states('sensor.qnap_tvs_473e_media_status') }} · Health: {{ states('sensor.qnap_tvs_473e_media_health') }}
+          
+          {% set reading = states['sensor.qnap_tvs_473e_media_used_capacity'] %}
+          Updated {{ relative_time(reading.last_updated) }} ago
+        card_mod:
+          style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+  - type: "vertical-stack"
+    view_layout:
+      grid-area: "cctv"
+    cards:
+      - type: "custom:bubble-card"
+        card_type: "separator"
+        name: "CCTV"
+        icon: "mdi:cctv"
+      - type: "gauge"
+        entity: "sensor.qnap_tvs_473e_cctv_used_capacity"
+        name: "Used capacity"
+        min: 0
+        max: 100
+        needle: false
+        severity:
+          green: 0
+          yellow: 75
+          red: 90
+        tap_action:
+          action: "more-info"
+        card_mod:
+          style: "ha-card { height: 180px; border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; --gauge-color: #42c6b7; }"
+      - type: "markdown"
+        content: |
+          {% macro size(id) -%}{%- set value = states(id) -%}{%- if is_number(value) -%}{%- set bytes = value | float -%}{%- if bytes >= 1099511627776 -%}{{ (bytes / 1099511627776) | round(2) }} TiB{%- else -%}{{ (bytes / 1073741824) | round(1) }} GiB{%- endif -%}{%- else -%}Unavailable{%- endif -%}{%- endmacro %}
+          **{{ size('sensor.qnap_tvs_473e_cctv_used_space') }} used** / {{ size('sensor.qnap_tvs_473e_cctv_total_capacity') }}
+          
+          **{{ size('sensor.qnap_tvs_473e_cctv_free_space') }} free**
+          
+          Volume: {{ states('sensor.qnap_tvs_473e_cctv_status') }} · Health: {{ states('sensor.qnap_tvs_473e_cctv_health') }}
+          
+          {% set reading = states['sensor.qnap_tvs_473e_cctv_used_capacity'] %}
+          Updated {{ relative_time(reading.last_updated) }} ago
+        card_mod:
+          style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+  - type: "vertical-stack"
+    view_layout:
+      grid-area: "backups"
+    cards:
+      - type: "custom:bubble-card"
+        card_type: "separator"
+        name: "Backups"
+        icon: "mdi:backup-restore"
+      - type: "gauge"
+        entity: "sensor.qnap_tvs_473e_backups_used_capacity"
+        name: "Used capacity"
+        min: 0
+        max: 100
+        needle: false
+        severity:
+          green: 0
+          yellow: 75
+          red: 90
+        tap_action:
+          action: "more-info"
+        card_mod:
+          style: "ha-card { height: 180px; border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; --gauge-color: #42c6b7; }"
+      - type: "markdown"
+        content: |
+          {% macro size(id) -%}{%- set value = states(id) -%}{%- if is_number(value) -%}{%- set bytes = value | float -%}{%- if bytes >= 1099511627776 -%}{{ (bytes / 1099511627776) | round(2) }} TiB{%- else -%}{{ (bytes / 1073741824) | round(1) }} GiB{%- endif -%}{%- else -%}Unavailable{%- endif -%}{%- endmacro %}
+          **{{ size('sensor.qnap_tvs_473e_backups_used_space') }} used** / {{ size('sensor.qnap_tvs_473e_backups_total_capacity') }}
+          
+          **{{ size('sensor.qnap_tvs_473e_backups_free_space') }} free**
+          
+          Volume: {{ states('sensor.qnap_tvs_473e_backups_status') }} · Health: {{ states('sensor.qnap_tvs_473e_backups_health') }}
+          
+          {% set reading = states['sensor.qnap_tvs_473e_backups_used_capacity'] %}
+          Updated {{ relative_time(reading.last_updated) }} ago
+        card_mod:
+          style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+  - type: "vertical-stack"
+    view_layout:
+      grid-area: "health"
+    cards:
+      - type: "custom:bubble-card"
+        card_type: "separator"
+        name: "Drive health"
+        icon: "mdi:harddisk"
+      - type: "entities"
+        show_header_toggle: false
+        entities:
+          - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_1_smart_health"
+            name: "Disk 1 · SMART"
+            icon: "mdi:harddisk"
+          - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_2_smart_health"
+            name: "Disk 2 · SMART"
+            icon: "mdi:harddisk"
+          - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_3_smart_health"
+            name: "Disk 3 · SMART"
+            icon: "mdi:harddisk"
+          - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_4_smart_health"
+            name: "Disk 4 · SMART"
+            icon: "mdi:harddisk"
+          - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_5_smart_health"
+            name: "Disk 5 · SMART"
+            icon: "mdi:harddisk"
+          - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_6_smart_health"
+            name: "Disk 6 · SMART"
+            icon: "mdi:harddisk"
+        card_mod:
+          style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+      - type: "grid"
+        columns: 2
+        square: false
+        cards:
+          - type: "gauge"
+            entity: "sensor.qnap_tvs_473e_enclosure_0_disk_1_ssd_life_remaining"
+            name: "SSD 1 · life"
+            min: 0
+            max: 100
+            needle: false
+            severity:
+              red: 0
+              yellow: 30
+              green: 60
+            tap_action:
+              action: "more-info"
+            card_mod:
+              style: "ha-card { height: 130px; border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; --gauge-color: #42c6b7; }"
+          - type: "gauge"
+            entity: "sensor.qnap_tvs_473e_enclosure_0_disk_2_ssd_life_remaining"
+            name: "SSD 2 · life"
+            min: 0
+            max: 100
+            needle: false
+            severity:
+              red: 0
+              yellow: 30
+              green: 60
+            tap_action:
+              action: "more-info"
+            card_mod:
+              style: "ha-card { height: 130px; border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; --gauge-color: #42c6b7; }"
+  - type: "custom:apexcharts-card"
+    graph_span: "7d"
+    update_interval: "1min"
+    header:
+      show: true
+      title: "Volume usage · 7 days"
+      show_states: false
+    all_series_config:
+      stroke_width: 2
+      curve: "straight"
+      float_precision: 1
+      extend_to: false
+      fill_raw: "null"
+      group_by:
+        func: "last"
+        duration: "1h"
+        fill: "last"
+      show:
+        legend_value: false
+    yaxis:
+      - min: 0
+        max: 100
+        decimals: 0
+    apex_config:
+      chart:
+        height: 250
+        toolbar:
+          show: false
+        zoom:
+          enabled: false
+        animations:
+          enabled: false
+      grid:
+        borderColor: "#505050"
+        strokeDashArray: 3
+      legend:
+        position: "bottom"
+        fontSize: "12px"
+      tooltip:
+        shared: true
+      xaxis:
+        labels:
+          datetimeUTC: false
+      markers:
+        size: 0
+    series:
+      - entity: "sensor.qnap_tvs_473e_media_used_capacity"
+        name: "Media"
+        color: "#42c6b7"
+        curve: "stepline"
+      - entity: "sensor.qnap_tvs_473e_cctv_used_capacity"
+        name: "CCTV"
+        color: "#aa8cff"
+        curve: "stepline"
+      - entity: "sensor.qnap_tvs_473e_backups_used_capacity"
+        name: "Backups"
+        color: "#f5b45b"
+        curve: "stepline"
+    card_mod:
+      style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+    view_layout:
+      grid-area: "storage"
+  - type: "custom:apexcharts-card"
+    graph_span: "24h"
+    update_interval: "1min"
+    header:
+      show: true
+      title: "Drive temperatures · 24h"
+      show_states: false
+    all_series_config:
+      stroke_width: 2
+      curve: "straight"
+      float_precision: 1
+      extend_to: false
+      fill_raw: "null"
+      group_by:
+        func: "last"
+        duration: "15min"
+        fill: "last"
+      show:
+        legend_value: false
+    yaxis:
+      - min: 0
+        decimals: 0
+    apex_config:
+      chart:
+        height: 250
+        toolbar:
+          show: false
+        zoom:
+          enabled: false
+        animations:
+          enabled: false
+      grid:
+        borderColor: "#505050"
+        strokeDashArray: 3
+      legend:
+        position: "bottom"
+        fontSize: "12px"
+      tooltip:
+        shared: true
+      xaxis:
+        labels:
+          datetimeUTC: false
+      markers:
+        size: 0
+    series:
+      - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_1_temperature"
+        name: "Disk 1"
+        color: "#42c6b7"
+      - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_2_temperature"
+        name: "Disk 2"
+        color: "#aa8cff"
+      - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_3_temperature"
+        name: "Disk 3"
+        color: "#f5b45b"
+      - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_4_temperature"
+        name: "Disk 4"
+        color: "#67b7ff"
+      - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_5_temperature"
+        name: "Disk 5"
+        color: "#f178a3"
+      - entity: "sensor.qnap_tvs_473e_enclosure_0_disk_6_temperature"
+        name: "Disk 6"
+        color: "#b9d66b"
+    card_mod:
+      style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+    view_layout:
+      grid-area: "temperature"
+
+  - type: "vertical-stack"
+    view_layout:
+      grid-area: "throughput"
+    cards:
+      - type: "custom:bubble-card"
+        card_type: "separator"
+        name: "NAS network throughput"
+        icon: "mdi:network"
+      - type: "horizontal-stack"
+        cards:
+          - type: "entity"
+            entity: "sensor.qnap_tvs_473e_network_receive"
+            name: "To NAS · received"
+            icon: "mdi:download-network"
+            card_mod:
+              style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+          - type: "entity"
+            entity: "sensor.qnap_tvs_473e_network_transmit"
+            name: "From NAS · sent"
+            icon: "mdi:upload-network"
+            card_mod:
+              style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+      - type: "custom:apexcharts-card"
+        graph_span: "1h"
+        update_interval: "30s"
+        header:
+          show: true
+          title: "Network throughput · 1h"
+          show_states: false
+        all_series_config:
+          stroke_width: 2
+          curve: "straight"
+          float_precision: 2
+          extend_to: false
+          fill_raw: "null"
+          group_by:
+            func: "avg"
+            duration: "1min"
+            fill: "null"
+          show:
+            legend_value: false
+        yaxis:
+          - min: 0
+            decimals: 2
+        apex_config:
+          chart:
+            height: 230
+            toolbar:
+              show: false
+            zoom:
+              enabled: false
+            animations:
+              enabled: false
+          grid:
+            borderColor: "#505050"
+            strokeDashArray: 3
+          legend:
+            position: "bottom"
+            fontSize: "12px"
+          tooltip:
+            shared: true
+          xaxis:
+            labels:
+              datetimeUTC: false
+          markers:
+            size: 0
+        series:
+          - entity: "sensor.qnap_tvs_473e_network_receive"
+            name: "To NAS (Mbit/s)"
+            color: "#42c6b7"
+          - entity: "sensor.qnap_tvs_473e_network_transmit"
+            name: "From NAS (Mbit/s)"
+            color: "#aa8cff"
+        card_mod:
+          style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+      - type: "markdown"
+        content: "LAN traffic · 30-second averages · To NAS = received; from NAS = sent. History fills as samples arrive."
+        card_mod:
+          style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"

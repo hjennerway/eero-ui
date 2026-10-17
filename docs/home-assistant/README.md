@@ -1,8 +1,9 @@
 # NAS throughput dashboard addition
 
-`nas-throughput.yaml` contains the cards applied to
-`/homeassistant/dashboards/views/dash-nas.yaml` in Home Assistant. Append the
-sequence item to the view's existing `cards` list. It uses the existing Bubble
+`dash-nas.yaml` is the complete updated view saved to
+`/homeassistant/dashboards/views/dash-nas.yaml` in Home Assistant.
+`nas-throughput.yaml` contains just the new cards for use in other views. Append
+its sequence item to a view's existing `cards` list. Both use the existing Bubble
 Card, ApexCharts Card and card-mod resources.
 
 For a `custom:grid-layout` view, add a final row to each `grid-template-areas`
