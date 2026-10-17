@@ -1,0 +1,80 @@
+# Append this item to the NAS view's cards list. See README.md for grid areas.
+- type: "vertical-stack"
+  view_layout:
+    grid-area: "throughput"
+  cards:
+    - type: "custom:bubble-card"
+      card_type: "separator"
+      name: "NAS network throughput"
+      icon: "mdi:network"
+    - type: "horizontal-stack"
+      cards:
+        - type: "entity"
+          entity: "sensor.qnap_tvs_473e_network_receive"
+          name: "To NAS · received"
+          icon: "mdi:download-network"
+          card_mod:
+            style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+        - type: "entity"
+          entity: "sensor.qnap_tvs_473e_network_transmit"
+          name: "From NAS · sent"
+          icon: "mdi:upload-network"
+          card_mod:
+            style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+    - type: "custom:apexcharts-card"
+      graph_span: "1h"
+      update_interval: "30s"
+      header:
+        show: true
+        title: "Network throughput · 1h"
+        show_states: false
+      all_series_config:
+        stroke_width: 2
+        curve: "straight"
+        float_precision: 2
+        extend_to: false
+        fill_raw: "null"
+        group_by:
+          func: "avg"
+          duration: "1min"
+          fill: "null"
+        show:
+          legend_value: false
+      yaxis:
+        - min: 0
+          decimals: 2
+      apex_config:
+        chart:
+          height: 230
+          toolbar:
+            show: false
+          zoom:
+            enabled: false
+          animations:
+            enabled: false
+        grid:
+          borderColor: "#505050"
+          strokeDashArray: 3
+        legend:
+          position: "bottom"
+          fontSize: "12px"
+        tooltip:
+          shared: true
+        xaxis:
+          labels:
+            datetimeUTC: false
+        markers:
+          size: 0
+      series:
+        - entity: "sensor.qnap_tvs_473e_network_receive"
+          name: "To NAS (Mbit/s)"
+          color: "#42c6b7"
+        - entity: "sensor.qnap_tvs_473e_network_transmit"
+          name: "From NAS (Mbit/s)"
+          color: "#aa8cff"
+      card_mod:
+        style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+    - type: "markdown"
+      content: "LAN traffic · 30-second averages · To NAS = received; from NAS = sent. History fills as samples arrive."
+      card_mod:
+        style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
