@@ -57,6 +57,7 @@ from .routes import (
 from .services.collector import MetricsCollector
 from .services.mqtt import MQTTService
 from .services.nas import nas_inventory
+from .services.nas_network import NASNetworkCollector
 from .services.victoria import victoria_client
 from .services.virtualization import VirtualizationService
 from .services.vpn import VPNService
@@ -148,6 +149,17 @@ async def lifespan(app: FastAPI):
             app.state.mqtt_service.publish_nas if app.state.mqtt_service else None,
         )
     )
+    nas_network = NASNetworkCollector()
+    nas_network_task = asyncio.create_task(
+        nas_network.run_forever(
+            settings.nas_file,
+            (
+                app.state.mqtt_service.publish_nas_network
+                if app.state.mqtt_service
+                else None
+            ),
+        )
+    )
 
     app.state.vpn = VPNService(
         (
@@ -185,6 +197,11 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         await nas_inventory.close()
+        nas_network_task.cancel()
+        try:
+            await nas_network_task
+        except asyncio.CancelledError:
+            pass
         collector_task.cancel()
         try:
             await collector_task

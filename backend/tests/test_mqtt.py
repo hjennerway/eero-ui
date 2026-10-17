@@ -19,6 +19,7 @@ from app.services.mqtt import (
     parse_broker_address,
 )
 from app.services.nas import NASDisk, NASSnapshot, NASStorage
+from app.services.nas_network import NASNetworkSnapshot
 from app.services.victoria import Sample
 
 
@@ -97,6 +98,57 @@ def nas_disk(**updates):
         power_on_hours=51448,
         power_on_days=2143,
     ).model_copy(update=updates)
+
+
+def test_nas_network_discovery_direction_expiry_cleanup_and_storage_independence(
+    service, broker
+):
+    snapshot = NASNetworkSnapshot(
+        id="qnap",
+        name="QNAP TVS-473e",
+        observed_at=datetime.now(UTC).isoformat(),
+        interfaces=["eth0"],
+        receive_mbps=12.5,
+        transmit_mbps=0,
+    )
+    service.publish_nas_network({"home": [snapshot]})
+    messages = published(broker)
+    configs = [json.loads(v) for k, v in messages.items() if k.endswith("/config")]
+    assert len(configs) == 2
+    assert {c["default_entity_id"] for c in configs} == {
+        "sensor.qnap_tvs_473e_network_receive",
+        "sensor.qnap_tvs_473e_network_transmit",
+    }
+    assert all(
+        c["device_class"] == "data_rate"
+        and c["unit_of_measurement"] == "Mbit/s"
+        and c["expire_after"] == 90
+        and c["state_class"] == "measurement"
+        for c in configs
+    )
+    topic = next(k for k in messages if k.endswith("/network/state"))
+    assert json.loads(messages[topic])["transmit_mbps"] == 0
+    assert "192.168.4.2" not in json.dumps(messages)
+    service.publish_nas({"home": [nas_snapshot()]})
+    assert json.loads(published(broker)[topic])["receive_mbps"] == 12.5
+    service.publish_nas_network(
+        {
+            "home": [
+                snapshot.model_copy(
+                    update={
+                        "observed_at": (
+                            datetime.now(UTC) - timedelta(seconds=91)
+                        ).isoformat()
+                    }
+                )
+            ]
+        }
+    )
+    assert json.loads(published(broker)[topic])["receive_mbps"] is None
+    assert published(broker)[topic.replace("/state", "/availability")] == "offline"
+    service.publish_nas_network({})
+    assert published(broker)[topic] == ""
+    assert all(published(broker)[k] == "" for k in messages if k.endswith("/config"))
 
 
 def test_nas_volumes_publish_retained_json_and_six_sensors_without_host(

@@ -6,6 +6,7 @@ import json
 import logging
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -21,6 +22,8 @@ import paho.mqtt.client as mqtt
 from pydantic import BaseModel, ConfigDict, Field, SecretStr, field_validator
 
 from .nas import REFRESH_SECONDS, NASDisk, NASSnapshot, NASStorage
+from .nas_network import EXPIRY_SECONDS as NAS_NETWORK_EXPIRY
+from .nas_network import NASNetworkSnapshot
 from .victoria import Sample
 from .vpn import VPNControlError, VPNReadError, VPNSnapshot
 
@@ -183,6 +186,7 @@ class MQTTService:
         self._snapshot_at = 0.0
         self._announced: dict[str, str] = {}
         self._nas_snapshots: dict[tuple[str, str], NASSnapshot] = {}
+        self._nas_network_snapshots: dict[tuple[str, str], NASNetworkSnapshot] = {}
         self._nas_removed_topics: set[str] = set()
         self._vpn_snapshot: VPNSnapshot | None = None
         self._vpn_control: (
@@ -309,6 +313,11 @@ class MQTTService:
                             )
                     for identity, snapshot in self._nas_snapshots.items():
                         for topic in self._nas_discovery_topics(identity, snapshot):
+                            messages.append(
+                                client.publish(topic, "", qos=1, retain=True)
+                            )
+                    for identity in self._nas_network_snapshots:
+                        for topic in self._nas_network_discovery_topics(identity):
                             messages.append(
                                 client.publish(topic, "", qos=1, retain=True)
                             )
@@ -673,6 +682,112 @@ class MQTTService:
     def _discovery_topic(self, network_id: str, key: str) -> str:
         return f"{self.config.discovery_prefix}/sensor/eero_ui_{self.config.instance_id}_{self._network_key(network_id)}/{key}/config"
 
+    def _nas_network_discovery_topics(self, identity: tuple[str, str]) -> list[str]:
+        return [
+            self._nas_discovery_topic(identity, "network", key, "network")
+            for key in ("receive_mbps", "transmit_mbps")
+        ]
+
+    def publish_nas_network(
+        self, networks: dict[str, list[NASNetworkSnapshot]]
+    ) -> None:
+        with self._lock:
+            snapshots = {
+                (network, nas.id): nas
+                for network, devices in networks.items()
+                for nas in devices
+            }
+            for identity in self._nas_network_snapshots.keys() - snapshots.keys():
+                self._nas_removed_topics.update(
+                    self._nas_network_discovery_topics(identity)
+                )
+                topic = f"{self._nas_topic(identity)}/network"
+                self._nas_removed_topics.update(
+                    (f"{topic}/state", f"{topic}/availability")
+                )
+            self._nas_network_snapshots = snapshots
+            if self.config.enabled and self._client and self._client.is_connected():
+                self._publish_snapshot()
+
+    def _publish_nas_network_snapshot(self) -> bool:
+        client = self._client
+        if client is None:
+            return False
+        available = False
+        for identity, snapshot in self._nas_network_snapshots.items():
+            fresh = False
+            try:
+                age = (
+                    datetime.now(UTC) - datetime.fromisoformat(snapshot.observed_at)
+                ).total_seconds()
+                fresh = 0 <= age < NAS_NETWORK_EXPIRY
+            except (ValueError, TypeError):
+                pass
+            available |= fresh
+            topic = f"{self._nas_topic(identity)}/network"
+            client.publish(
+                f"{topic}/availability",
+                "online" if fresh else "offline",
+                qos=1,
+                retain=True,
+            )
+            values = snapshot.model_dump(exclude={"id", "name"})
+            if not fresh:
+                values.update(receive_mbps=None, transmit_mbps=None)
+            client.publish(f"{topic}/state", json.dumps(values), qos=1, retain=True)
+            if not self.config.home_assistant_discovery:
+                continue
+            slug = re.sub(r"[^a-z0-9]+", "_", snapshot.name.lower()).strip("_")
+            for key, direction, label in (
+                ("receive_mbps", "receive", "Network receive"),
+                ("transmit_mbps", "transmit", "Network transmit"),
+            ):
+                unique = self._nas_entity_key(identity, "network", "network")
+                payload = {
+                    "name": label,
+                    "unique_id": f"eero_ui_{self.config.instance_id}_nas_{unique}_{key}",
+                    "default_entity_id": f"sensor.{slug}_network_{direction}",
+                    "state_topic": f"{topic}/state",
+                    "value_template": "{{ value_json."
+                    + key
+                    + " if value_json."
+                    + key
+                    + " is not none else 'None' }}",
+                    "unit_of_measurement": "Mbit/s",
+                    "device_class": "data_rate",
+                    "state_class": "measurement",
+                    "suggested_display_precision": 2,
+                    "icon": (
+                        "mdi:download-network"
+                        if direction == "receive"
+                        else "mdi:upload-network"
+                    ),
+                    "availability": [
+                        {"topic": f"{self.base_topic}/availability"},
+                        {"topic": f"{topic}/availability"},
+                    ],
+                    "availability_mode": "all",
+                    "expire_after": NAS_NETWORK_EXPIRY,
+                    "device": {
+                        "identifiers": [
+                            f"eero_ui_{self.config.instance_id}_nas_{self._network_key(identity[0])}_{self._network_key(identity[1])}"
+                        ],
+                        "name": snapshot.name,
+                        "manufacturer": "QNAP",
+                    },
+                }
+                discovery_topic = self._nas_discovery_topic(
+                    identity, "network", key, "network"
+                )
+                encoded = json.dumps(payload)
+                if self._announced.get(discovery_topic) != encoded:
+                    if (
+                        client.publish(discovery_topic, encoded, qos=1, retain=True).rc
+                        == mqtt.MQTT_ERR_SUCCESS
+                    ):
+                        self._announced[discovery_topic] = encoded
+        return available
+
     def _vpn_discovery_topics(self) -> list[str]:
         node = f"eero_ui_{self.config.instance_id}_vpn"
         return [
@@ -851,6 +966,7 @@ class MQTTService:
             snapshot["values"] for snapshot in self._snapshots.values()
         )
         available = self._publish_nas_snapshot() or available
+        available = self._publish_nas_network_snapshot() or available
         available = self._publish_vpn_snapshot() or available
         client.publish(
             f"{self.base_topic}/availability",

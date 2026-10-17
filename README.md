@@ -56,6 +56,8 @@ Topology can also show managed switches, their ports and link speeds using read-
 
 The **MQTT** section connects to your broker and supports Home Assistant auto discovery for wired/wireless client counts, the latest download/upload speed test, QNAP disk health and power-on hours, and each volume's total size, available space and percentage used. It also publishes VPN connection status, active clients and tunnel throughput, with **Connect** and **Disconnect** buttons in Home Assistant. See [MQTT setup](wiki/Configuration.md#mqtt-and-home-assistant).
 
+QNAP **network receive/transmit throughput** is sampled every **30 seconds** through the existing SNMP connection and published as two sensors on the same Home Assistant NAS device. These readings include LAN transfers and are independent of the five-minute storage checks. See [interface selection and rate semantics](wiki/Configuration.md#mqtt-and-home-assistant).
+
 **Keyboard shortcuts** — `⌘K` / `Ctrl+K` opens the command palette, `?` shows the shortcuts help, `Esc` closes the open dialog or menu. Shortcuts never fire while you are typing in a field. Device filters (`q`, `status`, `conn`, `band`, `sort`, `dir`) are encoded in the URL, so a filtered view survives a refresh and can be shared.
 
 **Runtime dependencies added in 6.0** — exactly one: [`@tanstack/svelte-virtual`](https://github.com/TanStack/virtual) (MIT), which virtualizes the device table so a few hundred rows stay smooth. The UI fonts (Inter and JetBrains Mono, variable WOFF2) are self-hosted from `frontend/static/fonts/` under the SIL Open Font License; the licence text ships in `static/fonts/OFL.txt`. Nothing is fetched from a third party at runtime.

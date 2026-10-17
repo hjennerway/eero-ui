@@ -59,6 +59,7 @@ class NASConfig(BaseModel):
     host: IPv4Address
     port: int = Field(default=161, ge=1, le=65535)
     community: SecretStr = Field(min_length=1, max_length=128)
+    network_interfaces: list[str] | None = Field(default=None, max_length=16)
     qts: QTSConfig | None = None
 
     @field_validator("host")

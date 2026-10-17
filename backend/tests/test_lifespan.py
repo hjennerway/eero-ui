@@ -106,11 +106,27 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
         start=lambda: call_order.append("mqtt_started"),
         publish_samples=lambda samples: None,
         publish_nas=lambda snapshots: None,
+        publish_nas_network=lambda snapshots: None,
         publish_vpn=lambda snapshot: None,
         set_vpn_controller=lambda controller: None,
         close=close_mqtt,
     )
     nas_started = asyncio.Event()
+    network_started = asyncio.Event()
+
+    async def poll_network(path, publish):
+        assert publish is mqtt_service.publish_nas_network
+        network_started.set()
+        try:
+            await asyncio.Future()
+        finally:
+            call_order.append("nas_network_task_cancelled")
+
+    monkeypatch.setattr(
+        main_module,
+        "NASNetworkCollector",
+        lambda: SimpleNamespace(run_forever=poll_network),
+    )
 
     async def poll_nas(path, publish):
         assert publish is mqtt_service.publish_nas
@@ -141,12 +157,14 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
         async with main_module.lifespan(main_module.app):
             await asyncio.wait_for(collector.started.wait(), timeout=1)
             await asyncio.wait_for(nas_started.wait(), timeout=1)
+            await asyncio.wait_for(network_started.wait(), timeout=1)
             assert main_module.app.state.mqtt_service is mqtt_service
             raise RuntimeError("lifespan interrupted")
     assert call_order == [
         "mqtt_started",
         "nas_task_cancelled",
         "nas_closed",
+        "nas_network_task_cancelled",
         "collector_task_cancelled",
         "mqtt_closed",
     ]
