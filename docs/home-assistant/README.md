@@ -32,7 +32,9 @@ transmit means **from the NAS**. Cards show Mbit/s; the one-hour chart averages
 samples into one-minute buckets and leaves unavailable periods as gaps.
 
 `wan-throughput.yaml` adds one compact card with total WAN download and upload.
-The full view places it in the existing `network` grid area. Change its two
+The full view places it in a `wan` row beside the throughput section. Add
+`"wan wan wan wan"`, `"wan wan"`, or `"wan"` to the appropriate grid layouts
+when using the standalone card in another view. Change its two
 entity IDs to match your Eero network's name if necessary. The MQTT network
 device now discovers **WAN download** and **WAN upload**, separately from the
 latest speed-test sensors. Eero's live usage excludes local LAN transfers.
