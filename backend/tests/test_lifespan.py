@@ -16,11 +16,14 @@ real, live task to cancel) and patched ``shutdown_client`` /
 """
 
 import asyncio
+import threading
 from types import SimpleNamespace
 
 import pytest
 
 from app import main as main_module
+from app.plugins.nas import plugin as nas_plugin
+from app.plugins.vpn import plugin as vpn_plugin
 
 
 class FakeCollector:
@@ -76,9 +79,7 @@ async def test_vpn_collector_stops_before_the_metrics_store_closes(monkeypatch):
     vpn_collector = FakeCollector()
     vpn_collector.call_order = call_order
     vpn_collector.control = _noop_async
-    monkeypatch.setattr(
-        main_module, "VPNService", lambda *args, **kwargs: vpn_collector
-    )
+    monkeypatch.setattr(vpn_plugin, "VPNService", lambda *args, **kwargs: vpn_collector)
     monkeypatch.setattr(
         main_module, "MetricsCollector", lambda *args, **kwargs: FakeCollector()
     )
@@ -103,19 +104,22 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
         call_order.append("mqtt_closed")
 
     mqtt_service = SimpleNamespace(
+        _lock=threading.RLock(),
+        _client=None,
         start=lambda: call_order.append("mqtt_started"),
         publish_samples=lambda samples: None,
-        publish_nas=lambda snapshots: None,
-        publish_nas_network=lambda snapshots: None,
-        publish_vpn=lambda snapshot: None,
-        set_vpn_controller=lambda controller: None,
+        extensions={},
+        config=SimpleNamespace(enabled=False),
         close=close_mqtt,
+    )
+    mqtt_service.add_extension = lambda name, extension: mqtt_service.extensions.update(
+        {name: extension}
     )
     nas_started = asyncio.Event()
     network_started = asyncio.Event()
 
     async def poll_network(path, publish):
-        assert publish is mqtt_service.publish_nas_network
+        assert publish.__self__ is mqtt_service.extensions["nas"]
         network_started.set()
         try:
             await asyncio.Future()
@@ -123,13 +127,13 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
             call_order.append("nas_network_task_cancelled")
 
     monkeypatch.setattr(
-        main_module,
+        nas_plugin,
         "NASNetworkCollector",
         lambda: SimpleNamespace(run_forever=poll_network),
     )
 
     async def poll_nas(path, publish):
-        assert publish is mqtt_service.publish_nas
+        assert publish.__self__ is mqtt_service.extensions["nas"]
         nas_started.set()
         try:
             await asyncio.Future()
@@ -140,7 +144,7 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
         call_order.append("nas_closed")
 
     monkeypatch.setattr(
-        main_module,
+        nas_plugin,
         "nas_inventory",
         SimpleNamespace(run_forever=poll_nas, close=close_nas),
     )
@@ -162,9 +166,9 @@ async def test_mqtt_closes_after_collector_even_when_lifespan_body_raises(monkey
             raise RuntimeError("lifespan interrupted")
     assert call_order == [
         "mqtt_started",
+        "nas_network_task_cancelled",
         "nas_task_cancelled",
         "nas_closed",
-        "nas_network_task_cancelled",
         "collector_task_cancelled",
         "mqtt_closed",
     ]
@@ -247,3 +251,34 @@ class TestLifespanCleanupRunsBeforeYield:
             # "inside" the running application, before any shutdown code
             # has had a chance to run.
             assert cleanup_calls == [1]
+
+
+async def test_virtualization_plugin_stops_and_closes_before_core_clients(monkeypatch):
+    from app.plugins.virtualization import plugin as virtualization_plugin
+
+    events = []
+    inventory = FakeCollector()
+    inventory.call_order = events
+    inventory.load = lambda: None
+
+    async def close_inventory():
+        events.append("inventory_closed")
+
+    async def close_client():
+        events.append("client_closed")
+
+    inventory.aclose = close_inventory
+    monkeypatch.setattr(
+        virtualization_plugin, "VirtualizationService", lambda *a: inventory
+    )
+    monkeypatch.setattr(
+        main_module, "MetricsCollector", lambda *a, **k: FakeCollector()
+    )
+    monkeypatch.setattr(main_module, "shutdown_client", close_client)
+    monkeypatch.setattr(main_module.victoria_client, "aclose", _noop_async)
+    async with main_module.lifespan(main_module.app):
+        await asyncio.wait_for(inventory.started.wait(), timeout=1)
+        assert main_module.app.state.virtualization is inventory
+    assert inventory.cancelled
+    assert events == ["collector_task_cancelled", "inventory_closed", "client_closed"]
+    assert main_module.app.state.virtualization is None

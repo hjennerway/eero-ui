@@ -7,8 +7,8 @@ from xml.etree import ElementTree as ET
 import httpx
 import pytest
 
-from app.services import qts
-from app.services.nas import NASConfig, NASDisk, NASInventory, NASSnapshot
+from app.plugins.nas import qts
+from app.plugins.nas.nas import NASConfig, NASDisk, NASInventory, NASSnapshot
 
 
 def config(**updates):

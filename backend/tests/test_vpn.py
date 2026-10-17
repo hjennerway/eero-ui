@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from app.main import app
-from app.services import vpn
+from app.plugins.vpn import vpn
 from app.services.victoria import VictoriaWriteError
 
 

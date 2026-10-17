@@ -20,6 +20,8 @@ services:
       EERO_DASHBOARD_COLLECTION_INTERVAL: "${EERO_DASHBOARD_COLLECTION_INTERVAL:-60}"
       EERO_DASHBOARD_METRICS_RETENTION: "${EERO_DASHBOARD_METRICS_RETENTION:-1y}"
       # EERO_DASHBOARD_DISCOVERY_FILE: /discovery/arp.json
+      # An empty value disables plugins; MQTT and WAN sensors remain available.
+      EERO_DASHBOARD_PLUGINS: "${EERO_DASHBOARD_PLUGINS-nas,vpn,virtualization}"
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]

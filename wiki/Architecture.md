@@ -2,6 +2,8 @@
 
 ## System Overview
 
+NAS, VPN and virtualization are optional bundled plugins. Their pages, API clients, collectors and MQTT adapters live under `frontend/src/lib/plugins/` and `backend/app/plugins/`. Shared registries handle sidebar links, page loading, API mounting and startup/shutdown. MQTT broker settings and WAN sensors remain core. See [plugin development and upstream synchronization](../docs/plugins.md).
+
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                    Svelte Frontend (SPA)                     │

@@ -1,0 +1,71 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "23 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: upstream-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository != 'fulviofreitas/eero-ui'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      SYNC_BRANCH: automation/upstream-sync
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: master
+          fetch-depth: 0
+          token: ${{ secrets.UPSTREAM_SYNC_TOKEN || github.token }}
+      - name: Merge latest upstream master on a review branch
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git fetch https://github.com/fulviofreitas/eero-ui.git master
+          upstream_sha=$(git rev-parse FETCH_HEAD)
+          if git merge-base --is-ancestor "$upstream_sha" HEAD; then
+            echo 'Upstream is already merged.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          previous_sha=$(git ls-remote origin "refs/heads/$SYNC_BRANCH" | cut -f1)
+          git switch -c "$SYNC_BRANCH"
+          if ! git merge --no-edit "$upstream_sha"; then
+            echo 'Upstream merge needs manual conflict resolution:' >> "$GITHUB_STEP_SUMMARY"
+            git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            exit 1
+          fi
+          git push --force-with-lease="refs/heads/$SYNC_BRANCH:$previous_sha" origin "HEAD:refs/heads/$SYNC_BRANCH"
+          echo 'changed=true' >> "$GITHUB_OUTPUT"
+      - name: Open or update the upstream merge PR
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          body_file=$(mktemp)
+          cat > "$body_file" <<'EOF'
+          Merge the latest `fulviofreitas/eero-ui:master` into this fork while preserving local integrations.
+
+          Review the diff and run the backend tests, frontend checks, tests and production build before merging. MQTT and WAN sensors remain core; NAS, VPN and virtualization are optional plugins.
+          EOF
+          existing=$(gh pr list --base master --head "$SYNC_BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh pr edit "$existing" --title 'chore: sync upstream master' --body-file "$body_file"
+          else
+            gh pr create --base master --head "$SYNC_BRANCH" --title 'chore: sync upstream master' --body-file "$body_file"
+          fi

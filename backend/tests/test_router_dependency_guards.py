@@ -37,6 +37,9 @@ directly (TEST-SME investigation, 2026-09-24).
 """
 
 from app.deps import require_auth, validate_request_path_ids
+from app.plugins.nas import routes as nas
+from app.plugins.virtualization import routes as virtualization
+from app.plugins.vpn import routes as vpn
 from app.routes import (
     account,
     auth,
@@ -44,11 +47,8 @@ from app.routes import (
     eeros,
     metrics,
     mqtt,
-    nas,
     networks,
     profiles,
-    virtualization,
-    vpn,
 )
 
 _ROUTER_PREFIXES = {

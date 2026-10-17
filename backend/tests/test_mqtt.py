@@ -11,6 +11,9 @@ import pytest
 from pydantic import SecretStr, ValidationError
 
 from app.main import app
+from app.plugins.nas.mqtt import NASMQTT
+from app.plugins.nas.nas import NASDisk, NASSnapshot, NASStorage
+from app.plugins.nas.nas_network import NASNetworkSnapshot
 from app.routes.mqtt import get_mqtt_service
 from app.services.mqtt import (
     MQTTService,
@@ -18,14 +21,14 @@ from app.services.mqtt import (
     load_settings,
     parse_broker_address,
 )
-from app.services.nas import NASDisk, NASSnapshot, NASStorage
-from app.services.nas_network import NASNetworkSnapshot
 from app.services.victoria import Sample
 
 
 @pytest.fixture
 def service(tmp_path):
-    return MQTTService(tmp_path / "mqtt.json")
+    service = MQTTService(tmp_path / "mqtt.json")
+    service.add_extension("nas", NASMQTT(service))
+    return service
 
 
 @pytest.fixture
@@ -115,7 +118,7 @@ def test_nas_network_discovery_direction_expiry_cleanup_and_storage_independence
         receive_mbps=12.5,
         transmit_mbps=0,
     )
-    service.publish_nas_network({"home": [snapshot]})
+    service.extensions["nas"].publish_nas_network({"home": [snapshot]})
     messages = published(broker)
     configs = [json.loads(v) for k, v in messages.items() if k.endswith("/config")]
     assert len(configs) == 2
@@ -133,9 +136,9 @@ def test_nas_network_discovery_direction_expiry_cleanup_and_storage_independence
     topic = next(k for k in messages if k.endswith("/network/state"))
     assert json.loads(messages[topic])["transmit_mbps"] == 0
     assert "192.168.4.2" not in json.dumps(messages)
-    service.publish_nas({"home": [nas_snapshot()]})
+    service.extensions["nas"].publish_nas({"home": [nas_snapshot()]})
     assert json.loads(published(broker)[topic])["receive_mbps"] == 12.5
-    service.publish_nas_network(
+    service.extensions["nas"].publish_nas_network(
         {
             "home": [
                 snapshot.model_copy(
@@ -150,7 +153,7 @@ def test_nas_network_discovery_direction_expiry_cleanup_and_storage_independence
     )
     assert json.loads(published(broker)[topic])["receive_mbps"] is None
     assert published(broker)[topic.replace("/state", "/availability")] == "offline"
-    service.publish_nas_network({})
+    service.extensions["nas"].publish_nas_network({})
     assert published(broker)[topic] == ""
     assert all(published(broker)[k] == "" for k in messages if k.endswith("/config"))
 
@@ -158,7 +161,7 @@ def test_nas_network_discovery_direction_expiry_cleanup_and_storage_independence
 def test_nas_volumes_publish_retained_json_and_six_sensors_without_host(
     service, broker
 ):
-    service.publish_nas({"home": [nas_snapshot()]})
+    service.extensions["nas"].publish_nas({"home": [nas_snapshot()]})
     messages = published(broker)
     configs = [json.loads(v) for k, v in messages.items() if k.endswith("/config")]
     assert len(configs) == 6
@@ -183,7 +186,7 @@ def test_nas_volumes_publish_retained_json_and_six_sensors_without_host(
 def test_nas_disks_publish_health_and_exact_power_on_hours(service, broker, hours):
     disk = nas_disk(power_on_hours=hours, ssd_life_remaining_percent=0)
     snapshot = nas_snapshot(disks=[disk], volumes=[])
-    service.publish_nas({"home": [snapshot]})
+    service.extensions["nas"].publish_nas({"home": [snapshot]})
     messages = published(broker)
     state_topic = next(k for k in messages if "/disks/" in k)
     assert json.loads(messages[state_topic]) == {
@@ -237,7 +240,7 @@ def test_all_volumes_publish_total_available_and_used_percentage(service, broker
         ),
         NASStorage(id="3", name="Unavailable"),
     ]
-    service.publish_nas({"home": [nas_snapshot(volumes=volumes)]})
+    service.extensions["nas"].publish_nas({"home": [nas_snapshot(volumes=volumes)]})
     messages = published(broker)
     states = {
         state["id"]: state
@@ -265,7 +268,7 @@ def test_nas_identities_do_not_collide_and_reconnect_expires_old_readings(
 ):
     snapshot = nas_snapshot(disks=[nas_disk(), nas_disk(id="2", name="Disk 2")])
     devices = [snapshot, snapshot.model_copy(update={"id": "other-nas"})]
-    service.publish_nas({"home": devices, "office": devices})
+    service.extensions["nas"].publish_nas({"home": devices, "office": devices})
     configs = [
         json.loads(v) for k, v in published(broker).items() if k.endswith("/config")
     ]
@@ -280,7 +283,7 @@ def test_nas_identities_do_not_collide_and_reconnect_expires_old_readings(
         )
         for device in devices
     ]
-    service.publish_nas({"home": old, "office": old})
+    service.extensions["nas"].publish_nas({"home": old, "office": old})
     broker.publish.reset_mock()
     service._on_connect(broker, None, None, SimpleNamespace(is_failure=False), None)
     messages = published(broker)
@@ -315,9 +318,9 @@ def test_nas_unreachable_preserves_entities_as_unavailable_and_removal_cleans_to
     service, broker
 ):
     snapshot = nas_snapshot(disks=[nas_disk()])
-    service.publish_nas({"home": [snapshot]})
+    service.extensions["nas"].publish_nas({"home": [snapshot]})
     broker.publish.reset_mock()
-    service.publish_nas(
+    service.extensions["nas"].publish_nas(
         {"home": [nas_snapshot(status="unreachable", volumes=[], observed_at=None)]}
     )
     messages = published(broker)
@@ -332,7 +335,7 @@ def test_nas_unreachable_preserves_entities_as_unavailable_and_removal_cleans_to
         ]
         is None
     )
-    service.publish_nas({"home": [snapshot]})
+    service.extensions["nas"].publish_nas({"home": [snapshot]})
     recovered = published(broker)
     assert all(
         value == "online"
@@ -348,7 +351,7 @@ def test_nas_unreachable_preserves_entities_as_unavailable_and_removal_cleans_to
         == 51448
     )
     broker.publish.reset_mock()
-    service.publish_nas({})
+    service.extensions["nas"].publish_nas({})
     removed = published(broker)
     assert (
         len([v for k, v in removed.items() if k.endswith("/config") and v == ""]) == 13
@@ -359,9 +362,11 @@ def test_nas_unreachable_preserves_entities_as_unavailable_and_removal_cleans_to
 @pytest.mark.parametrize(("kind", "count"), [("disks", 7), ("volumes", 6)])
 def test_removed_disk_or_volume_cleans_only_its_topics(service, broker, kind, count):
     snapshot = nas_snapshot(disks=[nas_disk()])
-    service.publish_nas({"home": [snapshot]})
+    service.extensions["nas"].publish_nas({"home": [snapshot]})
     broker.publish.reset_mock()
-    service.publish_nas({"home": [snapshot.model_copy(update={kind: []})]})
+    service.extensions["nas"].publish_nas(
+        {"home": [snapshot.model_copy(update={kind: []})]}
+    )
     messages = published(broker)
     removed = [k for k, v in messages.items() if v == ""]
     assert len([k for k in removed if k.endswith("/config")]) == count
@@ -371,7 +376,7 @@ def test_removed_disk_or_volume_cleans_only_its_topics(service, broker, kind, co
 
 def test_disks_and_volumes_publish_without_discovery(service, broker):
     service.config.home_assistant_discovery = False
-    service.publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
+    service.extensions["nas"].publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
     messages = published(broker)
     assert not any(k.endswith("/config") for k in messages)
     assert len([k for k in messages if k.endswith("/state")]) == 2
@@ -379,10 +384,10 @@ def test_disks_and_volumes_publish_without_discovery(service, broker):
 
 def test_nas_home_assistant_restart_reannounces_stable_discovery(service, broker):
     snapshot = nas_snapshot(disks=[nas_disk()])
-    service.publish_nas({"home": [snapshot]})
+    service.extensions["nas"].publish_nas({"home": [snapshot]})
     configs = {k: v for k, v in published(broker).items() if k.endswith("/config")}
     broker.publish.reset_mock()
-    service.publish_nas({"home": [snapshot]})
+    service.extensions["nas"].publish_nas({"home": [snapshot]})
     assert not any(k.endswith("/config") for k in published(broker))
     service._on_message(
         broker, None, SimpleNamespace(topic="homeassistant/status", payload=b"online")
@@ -393,12 +398,12 @@ def test_nas_home_assistant_restart_reannounces_stable_discovery(service, broker
 
 
 def test_disabled_mqtt_caches_nas_without_publishing(service):
-    service.publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
-    assert service._client is None and service._nas_snapshots
+    service.extensions["nas"].publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
+    assert service._client is None and service.extensions["nas"]._nas_snapshots
 
 
 async def test_turning_discovery_off_removes_nas_configs(service, broker):
-    service.publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
+    service.extensions["nas"].publish_nas({"home": [nas_snapshot(disks=[nas_disk()])]})
     broker.publish.reset_mock()
     await service.update(
         MQTTSettingsUpdate(broker_address="broker", home_assistant_discovery=False)

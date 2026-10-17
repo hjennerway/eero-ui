@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import math
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
@@ -39,6 +39,7 @@ from .deps import (
     get_eero_client,
     shutdown_client,
 )
+from .plugins import install_plugins, load_plugins, plugin_lifespan, stop_task
 from .routes import (
     account,
     auth,
@@ -47,20 +48,13 @@ from .routes import (
     eeros,
     metrics,
     mqtt,
-    nas,
     networks,
     profiles,
     switches,
-    virtualization,
-    vpn,
 )
 from .services.collector import MetricsCollector
 from .services.mqtt import MQTTService
-from .services.nas import nas_inventory
-from .services.nas_network import NASNetworkCollector
 from .services.victoria import victoria_client
-from .services.virtualization import VirtualizationService
-from .services.vpn import VPNService
 
 
 def get_eero_client_version() -> str:
@@ -104,117 +98,55 @@ _DEFAULT_RETRY_AFTER_SECONDS = 60
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager.
-
-    Starts the metrics collector task (see ``services/collector.py``,
-    phase-6.0-revamp.md § 2.2) after the app is up, and tears it down
-    before the shared EeroClient and VictoriaMetrics client are closed.
-    """
+    """Start core services, then plugins; unwind safely in reverse order."""
     _LOGGER.info("Starting Eero Dashboard Backend")
     _remove_legacy_exporter_session_file()
-    mqtt_path = (
-        Path(settings.mqtt_file)
-        if settings.mqtt_file
-        else Path(settings.cookie_file).parent / "mqtt.json"
-    )
-    app.state.mqtt_service = None
-    try:
-        mqtt_service = await asyncio.to_thread(
-            MQTTService, mqtt_path, settings.collection_interval
+    async with AsyncExitStack() as stack:
+        stack.push_async_callback(victoria_client.aclose)
+        stack.push_async_callback(shutdown_client)
+        mqtt_path = (
+            Path(settings.mqtt_file)
+            if settings.mqtt_file
+            else Path(settings.cookie_file).parent / "mqtt.json"
         )
-        await asyncio.to_thread(mqtt_service.start)
-        app.state.mqtt_service = mqtt_service
-    except (OSError, ValueError):
-        _LOGGER.warning("MQTT settings could not be loaded; MQTT is disabled")
-    collector = MetricsCollector(
-        get_eero_client,
-        victoria_client,
-        interval_seconds=settings.collection_interval,
-        publish_samples=(
-            app.state.mqtt_service.publish_samples if app.state.mqtt_service else None
-        ),
-        wan_enabled=lambda: bool(
-            app.state.mqtt_service and app.state.mqtt_service.config.enabled
-        ),
-    )
-    app.state.metrics_collector = collector
-    collector_task = asyncio.create_task(collector.run_forever())
-    inventory = VirtualizationService(
-        Path(settings.cookie_file).parent / "virtualization", get_eero_client
-    )
-    inventory.load()
-    app.state.virtualization = inventory
-    inventory_task = asyncio.create_task(inventory.run_forever())
+        app.state.mqtt_service = None
+        try:
+            mqtt_service = await asyncio.to_thread(
+                MQTTService, mqtt_path, settings.collection_interval
+            )
+            app.state.mqtt_service = mqtt_service
+            await asyncio.to_thread(mqtt_service.start)
+        except (OSError, ValueError):
+            if app.state.mqtt_service:
+                await app.state.mqtt_service.close()
+                app.state.mqtt_service = None
+            _LOGGER.warning("MQTT settings could not be loaded; MQTT is disabled")
 
-    nas_task = asyncio.create_task(
-        nas_inventory.run_forever(
-            settings.nas_file,
-            app.state.mqtt_service.publish_nas if app.state.mqtt_service else None,
-        )
-    )
-    nas_network = NASNetworkCollector()
-    nas_network_task = asyncio.create_task(
-        nas_network.run_forever(
-            settings.nas_file,
-            (
-                app.state.mqtt_service.publish_nas_network
+        async def close_mqtt():
+            if app.state.mqtt_service:
+                await app.state.mqtt_service.close()
+                app.state.mqtt_service = None
+
+        stack.push_async_callback(close_mqtt)
+        collector = MetricsCollector(
+            get_eero_client,
+            victoria_client,
+            interval_seconds=settings.collection_interval,
+            publish_samples=(
+                app.state.mqtt_service.publish_samples
                 if app.state.mqtt_service
                 else None
             ),
+            wan_enabled=lambda: bool(
+                app.state.mqtt_service and app.state.mqtt_service.config.enabled
+            ),
         )
-    )
-
-    app.state.vpn = VPNService(
-        (
-            Path(settings.vpn_file)
-            if settings.vpn_file
-            else Path(settings.cookie_file).parent / "vpn.json"
-        ),
-        victoria_client,
-        publish_snapshot=(
-            app.state.mqtt_service.publish_vpn if app.state.mqtt_service else None
-        ),
-    )
-    if app.state.mqtt_service:
-        app.state.mqtt_service.set_vpn_controller(app.state.vpn.control)
-    vpn_task = asyncio.create_task(app.state.vpn.run_forever())
-
-    try:
+        app.state.metrics_collector = collector
+        stack.push_async_callback(
+            stop_task, asyncio.create_task(collector.run_forever())
+        )
+        await stack.enter_async_context(plugin_lifespan(app))
         yield
-    finally:
-        _LOGGER.info("Shutting down Eero Dashboard Backend")
-        vpn_task.cancel()
-        try:
-            await vpn_task
-        except asyncio.CancelledError:
-            pass
-        inventory_task.cancel()
-        try:
-            await inventory_task
-        except asyncio.CancelledError:
-            pass
-        await inventory.aclose()
-        nas_task.cancel()
-        try:
-            await nas_task
-        except asyncio.CancelledError:
-            pass
-        await nas_inventory.close()
-        nas_network_task.cancel()
-        try:
-            await nas_network_task
-        except asyncio.CancelledError:
-            pass
-        collector_task.cancel()
-        try:
-            await collector_task
-        except asyncio.CancelledError:
-            pass
-        if app.state.mqtt_service:
-            await app.state.mqtt_service.close()
-            app.state.mqtt_service = None
-        await shutdown_client()
-        await victoria_client.aclose()
 
 
 # Create FastAPI application
@@ -282,8 +214,9 @@ app.add_middleware(BaseHTTPMiddleware, dispatch=_csrf_guard_middleware)
 async def request_validation_error_handler(
     request: Request, exc: RequestValidationError
 ):
-    if request.url.path == "/api/mqtt" or request.url.path.startswith(
-        ("/api/nas/", "/api/vpn/")
+    if (
+        request.url.path == "/api/mqtt"
+        or request.scope.get("endpoint") in app.state.plugin_endpoints
     ):
         # FastAPI normally echoes invalid inputs, which can contain secrets.
         return JSONResponse(
@@ -534,9 +467,6 @@ async def eero_base_exception_handler(
 # Include API routers
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(networks.router, prefix="/api/networks", tags=["Networks"])
-app.include_router(
-    virtualization.router, prefix="/api/networks", tags=["Virtualization"]
-)
 app.include_router(devices.router, prefix="/api/devices", tags=["Devices"])
 app.include_router(eeros.router, prefix="/api/eeros", tags=["Eeros"])
 app.include_router(profiles.router, prefix="/api/profiles", tags=["Profiles"])
@@ -545,8 +475,7 @@ app.include_router(account.router, prefix="/api/account", tags=["Account"])
 app.include_router(switches.router, prefix="/api/switches", tags=["Switches"])
 app.include_router(discovery.router, prefix="/api/discovery", tags=["LAN discovery"])
 app.include_router(mqtt.router, prefix="/api/mqtt", tags=["MQTT"])
-app.include_router(nas.router, prefix="/api/nas", tags=["NAS"])
-app.include_router(vpn.router, prefix="/api/vpn", tags=["VPN"])
+install_plugins(app, load_plugins(settings.plugins))
 
 
 # Health check

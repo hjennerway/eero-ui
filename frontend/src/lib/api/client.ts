@@ -162,7 +162,7 @@ async function parseError(response: Response): Promise<ApiError> {
 /**
  * Core fetch wrapper with error handling
  */
-async function fetchWithHandling<T>(path: string, config: RequestConfig = {}): Promise<T> {
+export async function fetchWithHandling<T>(path: string, config: RequestConfig = {}): Promise<T> {
 	const {
 		method = 'GET',
 		body,
@@ -265,113 +265,7 @@ async function fetchWithHandling<T>(path: string, config: RequestConfig = {}): P
 // ============================================
 
 export const api = {
-	vpn: {
-		get: () => fetchWithHandling<import('./types').VPNSnapshot>('/vpn', { retries: 0 }),
-		control: (action: 'connect' | 'disconnect') =>
-			fetchWithHandling<import('./types').VPNSnapshot>('/vpn/tunnel', {
-				method: 'POST',
-				body: { action },
-				retries: 0,
-				timeout: 60000
-			}),
-		connection: () =>
-			fetchWithHandling<import('./types').VPNConnection>('/vpn/connection', { retries: 0 }),
-		tunnels: (connection: import('./types').VPNConnectionUpdate) =>
-			fetchWithHandling<import('./types').VPNTunnel[]>('/vpn/tunnels', {
-				method: 'POST',
-				body: connection,
-				retries: 0,
-				timeout: 60000
-			}),
-		saveConnection: (connection: import('./types').VPNConnectionUpdate) =>
-			fetchWithHandling<import('./types').VPNConnection>('/vpn/connection', {
-				method: 'PUT',
-				body: connection,
-				retries: 0,
-				timeout: 60000
-			}),
-		history: (range: '1h' | '6h' | '24h' = '1h') =>
-			fetchWithHandling<import('./types').VPNHistory>('/vpn/history', {
-				params: { range },
-				retries: 0
-			})
-	},
-	virtualization: {
-		get: (networkId: string) =>
-			fetchWithHandling<import('./types').VirtualizationSnapshot>(
-				`/networks/${networkId}/virtualization`
-			),
-		connection: (networkId: string) =>
-			fetchWithHandling<import('./types').VirtualizationConnection>(
-				`/networks/${networkId}/virtualization/connection`
-			),
-		saveConnection: (
-			networkId: string,
-			connection: import('./types').VirtualizationConnectionUpdate
-		) =>
-			fetchWithHandling<import('./types').VirtualizationConnection>(
-				`/networks/${networkId}/virtualization/connection`,
-				{
-					method: 'PUT',
-					body: connection,
-					retries: 0
-				}
-			),
-		refresh: (networkId: string, force = true) =>
-			fetchWithHandling<import('./types').VirtualizationSnapshot>(
-				`/networks/${networkId}/virtualization/refresh`,
-				{
-					method: 'POST',
-					body: { force },
-					retries: 0,
-					timeout: 65000
-				}
-			)
-	},
-	nas: {
-		list: (networkId?: string, refresh = false) =>
-			fetchWithHandling<import('./types').NASSnapshot[]>('/nas', {
-				params: {
-					...(networkId ? { network_id: networkId } : {}),
-					...(refresh ? { refresh: true } : {})
-				},
-				retries: 0,
-				timeout: 60000
-			}),
-		getQTS: (nasId: string, networkId: string) =>
-			fetchWithHandling<import('./types').QTSConnectionStatus>(
-				`/nas/${encodeURIComponent(nasId)}/qts`,
-				{
-					params: { network_id: networkId },
-					retries: 0
-				}
-			),
-		updateQTS: (
-			nasId: string,
-			networkId: string,
-			settings: import('./types').QTSConnectionUpdate
-		) =>
-			fetchWithHandling<import('./types').QTSConnectionStatus>(
-				`/nas/${encodeURIComponent(nasId)}/qts`,
-				{
-					method: 'PUT',
-					body: settings,
-					params: { network_id: networkId },
-					retries: 0
-				}
-			),
-		testQTS: (nasId: string, networkId: string, settings: import('./types').QTSConnectionUpdate) =>
-			fetchWithHandling<import('./types').QTSTestResult>(
-				`/nas/${encodeURIComponent(nasId)}/qts/test`,
-				{
-					method: 'POST',
-					body: settings,
-					params: { network_id: networkId },
-					retries: 0,
-					timeout: 60000
-				}
-			)
-	},
+	plugins: { list: () => fetchWithHandling<{ id: string }[]>('/plugins', { retries: 0 }) },
 	mqtt: {
 		get: () => fetchWithHandling<import('./types').MQTTStatus>('/mqtt', { retries: 0 }),
 		update: (settings: import('./types').MQTTSettingsUpdate) =>

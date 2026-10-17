@@ -8,8 +8,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from app.plugins.vpn.mqtt import VPNMQTT
+from app.plugins.vpn.vpn import VPNControlError, VPNSnapshot
 from app.services.mqtt import MQTTService, MQTTSettingsUpdate
-from app.services.vpn import VPNControlError, VPNSnapshot
 
 
 def snapshot(**updates):
@@ -28,8 +29,9 @@ def snapshot(**updates):
 @pytest.fixture
 async def connected(tmp_path, monkeypatch):
     service = MQTTService(tmp_path / "mqtt.json")
+    service.add_extension("vpn", VPNMQTT(service))
     controller = AsyncMock(return_value=snapshot())
-    service.set_vpn_controller(controller)
+    service.extensions["vpn"].set_vpn_controller(controller)
     client = MagicMock()
     client.is_connected.return_value = True
     client.publish.return_value.rc = 0
@@ -61,7 +63,7 @@ def command(service, client, payload=b"connect", retain=False):
 
 async def test_vpn_sensors_buttons_and_zero_throughput_are_published(connected):
     service, client, _ = connected
-    service.publish_vpn(snapshot())
+    service.extensions["vpn"].publish_vpn(snapshot())
     published = messages(client)
     topic = f"{service.base_topic}/vpn"
     state = json.loads(published[f"{topic}/state"])
@@ -91,13 +93,13 @@ async def test_vpn_sensors_buttons_and_zero_throughput_are_published(connected):
         assert configs[key]["retain"] is False and configs[key]["qos"] == 0
     assert published[f"{topic}/availability"] == "online"
     assert published[f"{topic}/control_availability"] == "online"
-    assert service.status().vpn_topic == topic
+    assert service.status().integration_topics["vpn"] == topic
     client.subscribe.assert_any_call(f"{topic}/command", qos=0)
 
 
 async def test_stale_readings_are_cleared_on_reconnect(connected):
     service, client, controller = connected
-    service.publish_vpn(
+    service.extensions["vpn"].publish_vpn(
         snapshot(collected_at=datetime.now(UTC) - timedelta(seconds=91))
     )
     service._on_connect(client, None, None, SimpleNamespace(is_failure=False), None)
@@ -113,7 +115,7 @@ async def test_stale_readings_are_cleared_on_reconnect(connected):
 
 async def test_unreachable_status_is_reported_without_inventing_traffic(connected):
     service, client, _ = connected
-    service.publish_vpn(
+    service.extensions["vpn"].publish_vpn(
         snapshot(
             status="unreachable",
             reachable=False,
@@ -132,7 +134,9 @@ async def test_unreachable_status_is_reported_without_inventing_traffic(connecte
 async def test_commands_dispatch_and_publish_non_retained_results(connected, action):
     service, client, controller = connected
     command(service, client, payload=action.encode())
-    await asyncio.wait_for(asyncio.wrap_future(service._vpn_pending), 1)
+    await asyncio.wait_for(
+        asyncio.wrap_future(service.extensions["vpn"]._vpn_pending), 1
+    )
     controller.assert_awaited_once_with(action)
     result = json.loads(messages(client)[f"{service.base_topic}/vpn/result"])
     assert result["action"] == action and result["success"]
@@ -159,7 +163,7 @@ async def test_retained_and_invalid_commands_never_dispatch(connected, payload, 
     command(service, client, payload, retain)
     await asyncio.sleep(0)
     controller.assert_not_awaited()
-    assert service._vpn_pending is None
+    assert service.extensions["vpn"]._vpn_pending is None
 
 
 async def test_busy_commands_are_not_queued_and_errors_are_reported(connected):
@@ -178,17 +182,19 @@ async def test_busy_commands_are_not_queued_and_errors_are_reported(connected):
     result = json.loads(messages(client)[f"{service.base_topic}/vpn/result"])
     assert not result["success"] and "in progress" in result["message"]
     release.set()
-    await asyncio.wait_for(asyncio.wrap_future(service._vpn_pending), 1)
+    await asyncio.wait_for(
+        asyncio.wrap_future(service.extensions["vpn"]._vpn_pending), 1
+    )
     assert controller.await_count == 1
-    assert not service._vpn_busy
+    assert not service.extensions["vpn"]._vpn_busy
     result = json.loads(messages(client)[f"{service.base_topic}/vpn/result"])
     assert not result["success"] and "tunnel name" in result["message"]
 
 
 async def test_discovery_removal_clears_vpn_buttons_and_sensors(connected):
     service, client, _ = connected
-    service.publish_vpn(snapshot())
-    topics = service._vpn_discovery_topics()
+    service.extensions["vpn"].publish_vpn(snapshot())
+    topics = service.extensions["vpn"]._vpn_discovery_topics()
     client.publish.reset_mock()
     await service.update(
         MQTTSettingsUpdate(broker_address="broker", home_assistant_discovery=False)
@@ -199,10 +205,12 @@ async def test_discovery_removal_clears_vpn_buttons_and_sensors(connected):
 async def test_discovery_disabled_still_publishes_state_and_accepts_commands(connected):
     service, client, controller = connected
     service.config.home_assistant_discovery = False
-    service.publish_vpn(snapshot())
+    service.extensions["vpn"].publish_vpn(snapshot())
     assert not any(topic.endswith("/config") for topic in messages(client))
     command(service, client, b"disconnect")
-    await asyncio.wait_for(asyncio.wrap_future(service._vpn_pending), 1)
+    await asyncio.wait_for(
+        asyncio.wrap_future(service.extensions["vpn"]._vpn_pending), 1
+    )
     controller.assert_awaited_once_with("disconnect")
 
 
@@ -218,4 +226,4 @@ async def test_shutdown_cancels_pending_control(connected):
     command(service, client)
     await started.wait()
     await service.close()
-    assert service._vpn_pending.cancelled()
+    assert service.extensions["vpn"]._vpn_pending.cancelled()

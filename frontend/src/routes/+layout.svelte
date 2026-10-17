@@ -27,6 +27,7 @@
 	import Icon from '$components/common/Icon.svelte';
 	import IconSprite from '#lib/icons/IconSprite.svelte';
 	import type { IconName } from '#lib/icons/paths.js';
+	import { loadPlugins, pluginNavItems } from '#lib/plugins/registry.js';
 	import '../app.css';
 
 	interface Props {
@@ -139,6 +140,7 @@
 	$effect(() => {
 		if (initialized && $isAuthenticated) {
 			void networksStore.fetch();
+			void loadPlugins();
 		}
 	});
 
@@ -175,9 +177,7 @@
 		{ path: '/profiles', label: 'Profiles', icon: 'profiles' },
 		{ path: '/topology', label: 'Topology', icon: 'topology' },
 		{ path: '/account', label: 'Account', icon: 'person' },
-		{ path: '/mqtt', label: 'MQTT', icon: 'plug' },
-		{ path: '/nas', label: 'NAS', icon: 'server' },
-		{ path: '/vpn', label: 'VPN', icon: 'lock' }
+		{ path: '/mqtt', label: 'MQTT', icon: 'plug' }
 	];
 
 	// Dynamic nav items including network link
@@ -189,11 +189,9 @@
 				: null,
 			...baseNavItems.slice(1, 4), // Devices, Eeros, Profiles
 			{ path: '/topology', label: 'Topology', icon: 'topology' as IconName }, // Topology at the end
-			{ path: '/virtualization', label: 'Virtualization', icon: 'server' as IconName },
 			baseNavItems[5], // Account
 			baseNavItems[6], // MQTT
-			baseNavItems[7], // NAS
-			baseNavItems[8] // VPN
+			...$pluginNavItems
 		].filter(Boolean) as { path: string; label: string; icon: IconName }[]
 	);
 

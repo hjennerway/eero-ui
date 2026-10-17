@@ -9,15 +9,19 @@ import pytest
 from pydantic import ValidationError
 
 from app.main import app
-from app.services import virtualization as module
-from app.services.virtualization import VirtualizationService, _lan_ip, _tls_context
-from app.virtualization_models import (
+from app.plugins.virtualization import virtualization as module
+from app.plugins.virtualization.models import (
     ConnectionUpdate,
     DockerContainer,
     DockerInventory,
     GuestInventory,
     NodeInventory,
     VirtualizationSnapshot,
+)
+from app.plugins.virtualization.virtualization import (
+    VirtualizationService,
+    _lan_ip,
+    _tls_context,
 )
 
 
@@ -453,6 +457,22 @@ async def test_routes_redact_credentials(inventory, monkeypatch, auth_client):
     assert response.status_code == 200
     assert "test-secret" not in response.text
     assert "token_secret" not in response.json()
+
+
+async def test_invalid_plugin_settings_do_not_echo_input_secrets(auth_client):
+    response = await auth_client.put(
+        "/api/networks/net-1/virtualization/connection",
+        json={
+            "url": "https://pve.test:8006",
+            "token_id": "monitor@pve!inventory",
+            "token_secret": "private-api-token",
+            "docker_port": "private-invalid-input",
+        },
+    )
+    assert response.status_code == 422
+    assert "private-api-token" not in response.text
+    assert "private-invalid-input" not in response.text
+    assert all("input" not in error for error in response.json()["detail"])
 
 
 async def test_routes_validate_ids_and_forward_manual_vs_automatic_refresh(

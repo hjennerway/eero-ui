@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.config import settings
-from app.services import nas_settings
-from app.services.nas import NASDisk, NASInventory, NASSnapshot
+from app.plugins.nas import nas_settings
+from app.plugins.nas.nas import NASDisk, NASInventory, NASSnapshot
 
 URL = "/api/nas/qnap/qts"
 UPDATE = {
@@ -161,7 +161,7 @@ async def test_test_connection_uses_entered_credentials_without_saving(
             disks=[NASDisk(id="1", name="Disk", power_on_hours=51448)],
         )
     )
-    monkeypatch.setattr("app.routes.nas.poll_nas", poll)
+    monkeypatch.setattr("app.plugins.nas.routes.poll_nas", poll)
     response = await auth_client.post(URL + "/test", json=UPDATE)
     assert response.status_code == 200 and response.json()["success"]
     assert "1 drive" in response.json()["message"]
@@ -189,7 +189,7 @@ async def test_saved_password_is_used_for_test_and_cache_key_changes(
     poll = AsyncMock(
         return_value=NASSnapshot(id="qnap", name="NAS", host="192.168.4.2")
     )
-    monkeypatch.setattr("app.routes.nas.poll_nas", poll)
+    monkeypatch.setattr("app.plugins.nas.routes.poll_nas", poll)
     await auth_client.post(URL + "/test", json={**UPDATE, "password": None})
     assert poll.call_args.args[0].qts.password.get_secret_value() == "private-password"
 

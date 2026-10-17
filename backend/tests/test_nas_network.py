@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from app.services import nas_network as net
-from app.services.nas import NASConfig
+from app.plugins.nas import nas_network as net
+from app.plugins.nas.nas import NASConfig
 
 
 def config(**updates):

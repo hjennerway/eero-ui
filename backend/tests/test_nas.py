@@ -10,8 +10,8 @@ from pysnmp.proto.rfc1902 import OctetString
 from pysnmp.proto.rfc1905 import NoSuchObject
 
 from app.config import settings
-from app.services import nas
-from app.services.nas import NASConfig, NASInventory, NASSnapshot
+from app.plugins.nas import nas
+from app.plugins.nas.nas import NASConfig, NASInventory, NASSnapshot
 
 
 def config(**updates):
@@ -382,7 +382,7 @@ async def test_manual_api_refresh_bypasses_five_minute_cache(
     path.write_text(json.dumps([config()]))
     monkeypatch.setattr(settings, "nas_file", str(path))
     inventory = NASInventory()
-    monkeypatch.setattr("app.routes.nas.nas_inventory", inventory)
+    monkeypatch.setattr("app.plugins.nas.routes.nas_inventory", inventory)
     poll = AsyncMock(
         side_effect=lambda c: NASSnapshot(id=c.id, name=c.name, host=str(c.host))
     )

@@ -41,6 +41,7 @@ class Settings(BaseModel):
     mqtt_file: str | None = None
     nas_file: str | None = None
     vpn_file: str | None = None
+    plugins: list[str] = ["nas", "vpn", "virtualization"]
 
     # eero-api SDK tuning (phase-6.0-revamp.md § 3.1, decision 6)
     sdk_legacy_cookie: bool = False
@@ -114,6 +115,13 @@ def get_settings() -> Settings:
         mqtt_file=os.environ.get("EERO_DASHBOARD_MQTT_FILE") or None,
         nas_file=os.environ.get("EERO_DASHBOARD_NAS_FILE") or None,
         vpn_file=os.environ.get("EERO_DASHBOARD_VPN_FILE") or None,
+        plugins=[
+            name.strip()
+            for name in os.environ.get(
+                "EERO_DASHBOARD_PLUGINS", "nas,vpn,virtualization"
+            ).split(",")
+            if name.strip()
+        ],
         sdk_legacy_cookie=os.environ.get(
             "EERO_DASHBOARD_SDK_LEGACY_COOKIE", "false"
         ).lower()

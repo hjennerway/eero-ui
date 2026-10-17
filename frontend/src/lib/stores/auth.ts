@@ -7,7 +7,7 @@
 import { writable, derived } from 'svelte/store';
 import { api, ApiClientError } from '$api/client';
 import { uiStore } from './ui';
-import { clearNASCache } from './nasCache';
+import { resetSessionCaches } from '#lib/session.js';
 
 // ============================================
 // Types
@@ -68,7 +68,7 @@ function createAuthStore() {
 
 			try {
 				const status = await api.auth.status();
-				if (!status.authenticated) clearNASCache();
+				if (!status.authenticated) resetSessionCaches();
 				update((s) => ({
 					...s,
 					authenticated: status.authenticated,
@@ -176,7 +176,7 @@ function createAuthStore() {
 		 * Log out
 		 */
 		async logout(): Promise<void> {
-			clearNASCache();
+			resetSessionCaches();
 			update((s) => ({ ...s, loading: true }));
 
 			try {
@@ -242,7 +242,7 @@ export const marketingEmailsConsent = derived(authStore, ($auth) => $auth.market
 // copy instead of a second, indistinguishable bare form.
 if (typeof window !== 'undefined') {
 	window.addEventListener('auth:unauthorized', (event) => {
-		clearNASCache();
+		resetSessionCaches();
 		const reason = (event as CustomEvent<{ reason?: 'expired' }>).detail?.reason;
 		if (reason === 'expired') {
 			authStore.setReason('expired');

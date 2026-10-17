@@ -110,6 +110,9 @@ const emptyVirtualizationConnection = {
 };
 
 export const handlers = [
+	http.get('/api/plugins', () =>
+		HttpResponse.json([{ id: 'nas' }, { id: 'vpn' }, { id: 'virtualization' }])
+	),
 	http.get('/api/vpn', () =>
 		HttpResponse.json({
 			host: '192.168.4.10',
