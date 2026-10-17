@@ -44,7 +44,9 @@ def broker(service, monkeypatch):
 
 def measurements(network_id="net-1", name="Home"):
     def sample(metric, value, **labels):
-        return Sample(metric, value, 1, {"network_id": network_id, **labels})
+        return Sample(
+            metric, value, int(time.time() * 1000), {"network_id": network_id, **labels}
+        )
 
     return [
         sample("eero_network_clients_count", 3, name=name),
@@ -54,6 +56,8 @@ def measurements(network_id="net-1", name="Home"):
         sample("eero_device_connected", 1, connection_type="unknown"),
         sample("eero_speed_download_mbps", 931.5),
         sample("eero_speed_upload_mbps", 107.2),
+        sample("eero_network_wan_download_mbps", 12.5),
+        sample("eero_network_wan_upload_mbps", 0.75),
     ]
 
 
@@ -449,7 +453,7 @@ def test_discovery_and_states_count_only_connected_known_clients(service, broker
         for topic, value in messages.items()
         if topic.endswith("/config")
     ]
-    assert len(configs) == 4
+    assert len(configs) == 6
     states = {
         topic.split("/")[-2]: value
         for topic, value in messages.items()
@@ -460,14 +464,18 @@ def test_discovery_and_states_count_only_connected_known_clients(service, broker
         "wireless_clients": "1",
         "download_mbps": "931.5",
         "upload_mbps": "107.2",
+        "wan_download_mbps": "12.5",
+        "wan_upload_mbps": "0.75",
     }
     assert messages[f"{service.base_topic}/availability"] == "online"
-    assert len({c["unique_id"] for c in configs}) == 4
+    assert len({c["unique_id"] for c in configs}) == 6
     assert len({c["device"]["identifiers"][0] for c in configs}) == 1
     for config in configs:
-        assert config["expire_after"] == 180
+        assert config["expire_after"] == (
+            90 if config["name"].startswith("WAN") else 180
+        )
         assert config["state_class"] == "measurement"
-        if "speed test" in config["name"]:
+        if "speed test" in config["name"] or config["name"].startswith("WAN"):
             assert config["unit_of_measurement"] == "Mbit/s"
             assert config["device_class"] == "data_rate"
     assert all(
@@ -513,7 +521,7 @@ def test_multiple_networks_do_not_collide_and_names_can_change(service, broker):
         for topic, value in published(broker).items()
         if topic.endswith("/config")
     ]
-    assert len({c["unique_id"] for c in configs}) == 8
+    assert len({c["unique_id"] for c in configs}) == 12
     assert {c["device"]["name"] for c in configs} == {"Home", "Office"}
     broker.publish.reset_mock()
     service.publish_samples(measurements(name="Renamed home"))
@@ -522,7 +530,7 @@ def test_multiple_networks_do_not_collide_and_names_can_change(service, broker):
         for topic, value in published(broker).items()
         if topic.endswith("/config")
     ]
-    assert len(configs) == 4
+    assert len(configs) == 6
     assert all(c["device"]["name"] == "Renamed home" for c in configs)
 
 
@@ -598,10 +606,31 @@ async def test_turning_discovery_off_removes_retained_configs(service, broker):
     removed = [
         value for topic, value in published(broker).items() if topic.endswith("/config")
     ]
-    assert removed == [""] * 4
+    assert removed == [""] * 6
     assert published(broker)[f"{service.base_topic}/availability"] == "offline"
     broker.disconnect.assert_called_once()
     broker.loop_stop.assert_called_once()
+
+
+def test_wan_samples_expire_even_when_nas_republishes_and_clear_on_failed_cycle(
+    service, broker
+):
+    service.publish_samples(measurements())
+    service._snapshots["net-1"]["wan_observed_at"] = time.time() - 91
+    broker.publish.reset_mock()
+    service._publish_snapshot()
+    assert all(
+        value == "None"
+        for topic, value in published(broker).items()
+        if "/wan_" in topic and topic.endswith("/state")
+    )
+    broker.publish.reset_mock()
+    service.publish_samples([s for s in measurements() if "wan_" not in s.name])
+    assert all(
+        value == "None"
+        for topic, value in published(broker).items()
+        if "/wan_" in topic and topic.endswith("/state")
+    )
 
 
 def test_start_sets_auth_tls_will_and_errors_are_safe(service, monkeypatch):

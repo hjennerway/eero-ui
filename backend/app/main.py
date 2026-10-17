@@ -133,6 +133,9 @@ async def lifespan(app: FastAPI):
         publish_samples=(
             app.state.mqtt_service.publish_samples if app.state.mqtt_service else None
         ),
+        wan_enabled=lambda: bool(
+            app.state.mqtt_service and app.state.mqtt_service.config.enabled
+        ),
     )
     app.state.metrics_collector = collector
     collector_task = asyncio.create_task(collector.run_forever())

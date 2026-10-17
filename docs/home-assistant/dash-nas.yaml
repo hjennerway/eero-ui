@@ -54,6 +54,21 @@ layout:
         "throughput throughput"
 cards:
 
+  - type: "entities"
+    title: "WAN throughput"
+    show_header_toggle: false
+    entities:
+      - entity: "sensor.gchq_listening_post_35x_wan_download"
+        name: "Download · total in"
+        icon: "mdi:download-network"
+      - entity: "sensor.gchq_listening_post_35x_wan_upload"
+        name: "Upload · total out"
+        icon: "mdi:upload-network"
+    card_mod:
+      style: "ha-card { border-radius: 18px; border: 1px solid var(--divider-color); box-shadow: none; }"
+    view_layout:
+      grid-area: "network"
+
   - type: "vertical-stack"
     view_layout:
       grid-area: "media"

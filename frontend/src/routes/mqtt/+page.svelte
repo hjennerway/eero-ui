@@ -223,16 +223,24 @@
 
 		<Card title="Home Assistant sensors">
 			<p class="text-muted">
-				Four sensors for each eero network, updated with the dashboard’s background collection.
+				Six sensors for each eero network, updated with the dashboard’s background collection.
 			</p>
 			<ul class="sensor-list">
 				<li><span>Wired clients</span><span class="text-muted">Connected devices</span></li>
 				<li><span>Wireless clients</span><span class="text-muted">Connected devices</span></li>
 				<li><span>Latest speed test download</span><span class="text-muted">Mbps</span></li>
 				<li><span>Latest speed test upload</span><span class="text-muted">Mbps</span></li>
+				<li><span>WAN download</span><span class="text-muted">Mbps</span></li>
+				<li><span>WAN upload</span><span class="text-muted">Mbps</span></li>
 			</ul>
 			<p class="text-muted">
 				Speed sensors use the latest recorded test. No new speed tests are started.
+			</p>
+			<p class="text-muted">
+				WAN sensors show total Internet traffic across connected devices, excluding local LAN
+				transfers. A short live report is requested during background collection, at most once a
+				minute. Readings take about 12 seconds to arrive and expire after 90 seconds. Bridge mode
+				and incomplete readings remain unknown.
 			</p>
 			<p class="text-muted">
 				Configured NAS devices publish every 5 minutes. Each volume includes total size, available

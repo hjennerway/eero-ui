@@ -22,7 +22,7 @@ async function renderSettings() {
 }
 
 describe('MQTT settings', () => {
-	it('shows four sensors, discovery enabled and a blank saved password', async () => {
+	it('shows six sensors, discovery enabled and a blank saved password', async () => {
 		await renderSettings();
 		expect(screen.getByLabelText('Home Assistant auto discovery')).toBeChecked();
 		expect(screen.getByLabelText('Password')).toHaveValue('');
@@ -31,7 +31,9 @@ describe('MQTT settings', () => {
 			'Wired clients',
 			'Wireless clients',
 			'Latest speed test download',
-			'Latest speed test upload'
+			'Latest speed test upload',
+			'WAN download',
+			'WAN upload'
 		]) {
 			expect(screen.getByText(name)).toBeInTheDocument();
 		}

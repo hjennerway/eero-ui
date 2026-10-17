@@ -26,12 +26,15 @@ from .nas_network import EXPIRY_SECONDS as NAS_NETWORK_EXPIRY
 from .nas_network import NASNetworkSnapshot
 from .victoria import Sample
 from .vpn import VPNControlError, VPNReadError, VPNSnapshot
+from .wan import EXPIRY_SECONDS as WAN_EXPIRY
 
 _SENSORS = {
     "wired_clients": ("Wired clients", "mdi:ethernet", None),
     "wireless_clients": ("Wireless clients", "mdi:wifi", None),
     "download_mbps": ("Latest speed test download", "mdi:download", "Mbit/s"),
     "upload_mbps": ("Latest speed test upload", "mdi:upload", "Mbit/s"),
+    "wan_download_mbps": ("WAN download", "mdi:download-network", "Mbit/s"),
+    "wan_upload_mbps": ("WAN upload", "mdi:upload-network", "Mbit/s"),
 }
 _VOLUME_SENSORS = {
     "capacity_bytes": ("Total capacity", "B", "data_size"),
@@ -491,6 +494,13 @@ class MQTTService:
                         and device.labels.get("connection_type") == connection
                         and device.value == 1
                     )
+            elif sample.name in (
+                "eero_network_wan_download_mbps",
+                "eero_network_wan_upload_mbps",
+            ):
+                if math.isfinite(sample.value) and sample.value >= 0:
+                    values[sample.name.removeprefix("eero_network_")] = sample.value
+                    snapshot["wan_observed_at"] = sample.timestamp_ms / 1000
             elif sample.name in ("eero_speed_download_mbps", "eero_speed_upload_mbps"):
                 if math.isfinite(sample.value) and sample.value >= 0:
                     key = (
@@ -928,7 +938,9 @@ class MQTTService:
                         "unique_id": f"eero_ui_{self.config.instance_id}_{network_key}_{key}",
                         "state_topic": f"{topic}/{key}/state",
                         "availability_topic": f"{self.base_topic}/availability",
-                        "expire_after": self._expiry,
+                        "expire_after": (
+                            WAN_EXPIRY if key.startswith("wan_") else self._expiry
+                        ),
                         "state_class": "measurement",
                         "icon": icon,
                         "device": {
@@ -946,6 +958,13 @@ class MQTTService:
                             device_class="data_rate",
                             suggested_display_precision=1,
                         )
+                    if key.startswith("wan_"):
+                        slug = re.sub(
+                            r"[^a-z0-9]+", "_", snapshot["name"].lower()
+                        ).strip("_")
+                        payload["default_entity_id"] = (
+                            f"sensor.{slug}_{key.removesuffix('_mbps')}"
+                        )
                     discovery_topic = self._discovery_topic(network_id, key)
                     encoded = json.dumps(payload)
                     if self._announced.get(discovery_topic) != encoded:
@@ -955,6 +974,10 @@ class MQTTService:
                         if info.rc == mqtt.MQTT_ERR_SUCCESS:
                             self._announced[discovery_topic] = encoded
                 value = snapshot["values"].get(key) if fresh else None
+                if key.startswith("wan_") and not (
+                    0 <= time.time() - snapshot.get("wan_observed_at", 0) < WAN_EXPIRY
+                ):
+                    value = None
                 # HA's numeric sensors interpret 'None' as unknown, never as 0.
                 client.publish(
                     f"{topic}/{key}/state",

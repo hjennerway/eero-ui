@@ -193,6 +193,83 @@ class TestMQTTPublishing:
         assert len(fake_victoria.written_batches) == 1
 
 
+class TestWANCollection:
+    async def test_reuses_one_device_read_throttles_reports_and_clears_failed_totals(
+        self, autospec_client, fake_victoria, monkeypatch
+    ):
+        prepare = AsyncMock()
+        monkeypatch.setattr("app.services.collector.prepare_wan_sample", prepare)
+        clock = [100.0]
+        monkeypatch.setattr("app.services.collector.time.monotonic", lambda: clock[0])
+        raw = make_device()
+        raw["usage"] = {"down_mbps": 12.5, "up_mbps": 0.75}
+        autospec_client.get_devices.return_value = make_raw_response([raw])
+        collector = make_collector(autospec_client, fake_victoria)
+        collector._wan_enabled = lambda: True
+        await collector.run_cycle()
+        prepare.assert_awaited_once_with(autospec_client, "net-1")
+        autospec_client.get_devices.assert_awaited_once_with(
+            network_id="net-1", refresh_cache=True
+        )
+        written = fake_victoria.written_batches[-1]
+        down = samples_by_name(written, "eero_network_wan_download_mbps")
+        assert len(down) == 1 and down[0].value == 12.5
+        assert down[0].labels == {"network_id": "net-1", "name": "Home"}
+        assert samples_by_name(written, "eero_network_wan_upload_mbps")[0].value == 0.75
+        # A ten-second collection setting must not start extra cloud reports.
+        clock[0] += 10
+        await collector.run_cycle()
+        prepare.assert_awaited_once()
+        assert (
+            samples_by_name(
+                fake_victoria.written_batches[-1], "eero_network_wan_download_mbps"
+            )[0].timestamp_ms
+            == down[0].timestamp_ms
+        )
+        clock[0] += 60
+        prepare.side_effect = EeroAPIException(503, "report unavailable")
+        await collector.run_cycle()
+        assert not samples_by_name(
+            fake_victoria.written_batches[-1], "eero_network_wan_download_mbps"
+        )
+        assert (
+            samples_by_name(
+                fake_victoria.written_batches[-1], "eero_network_clients_count"
+            )[0].value
+            == 1
+        )
+
+    @pytest.mark.parametrize("mode,enabled", [("BRIDGE", True), ("NAT", False)])
+    async def test_bridge_mode_and_disabled_mqtt_do_not_request_reports(
+        self, autospec_client, fake_victoria, monkeypatch, mode, enabled
+    ):
+        prepare = AsyncMock()
+        monkeypatch.setattr("app.services.collector.prepare_wan_sample", prepare)
+        network = make_network()
+        network["connection"] = {"mode": mode.lower()}
+        autospec_client.get_networks.return_value = make_raw_response([network])
+        collector = make_collector(autospec_client, fake_victoria)
+        collector._wan_enabled = lambda: enabled
+        await collector.run_cycle()
+        prepare.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        "payload",
+        [{"meta": {"code": 200}, "data": None}, make_raw_response([make_device()])],
+    )
+    async def test_missing_or_incomplete_device_usage_does_not_emit_zero(
+        self, autospec_client, fake_victoria, monkeypatch, payload
+    ):
+        monkeypatch.setattr("app.services.collector.prepare_wan_sample", AsyncMock())
+        autospec_client.get_devices.return_value = payload
+        collector = make_collector(autospec_client, fake_victoria)
+        collector._wan_enabled = lambda: True
+        await collector.run_cycle()
+        assert not samples_by_name(
+            fake_victoria.written_batches[-1], "eero_network_wan_download_mbps"
+        )
+
+
 class TestUnauthenticatedCycle:
     """An unauthenticated client must not touch the eero API at all."""
 
@@ -794,7 +871,10 @@ class TestMetricContractAllowlist:
         }
     )
 
-    ALLOWLIST = CONTRACT_METRICS | ADDED_METRICS
+    OPTIONAL_METRICS = frozenset(
+        {"eero_network_wan_download_mbps", "eero_network_wan_upload_mbps"}
+    )
+    ALLOWLIST = CONTRACT_METRICS | ADDED_METRICS | OPTIONAL_METRICS
 
     # Of the eight contract metrics, only these six are actually read back
     # by a surviving /api/metrics/* route today. The other two are written
@@ -848,7 +928,7 @@ class TestMetricContractAllowlist:
         no fewer -- on a fully successful cycle."""
         produced = await self._run_full_cycle(autospec_client, fake_victoria)
 
-        assert produced == self.ALLOWLIST, (
+        assert produced == self.ALLOWLIST - self.OPTIONAL_METRICS, (
             f"undocumented names: {produced - self.ALLOWLIST}; "
             f"missing contracted names: {self.ALLOWLIST - produced}"
         )
