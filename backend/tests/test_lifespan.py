@@ -17,6 +17,7 @@ real, live task to cancel) and patched ``shutdown_client`` /
 
 import asyncio
 import threading
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -282,3 +283,57 @@ async def test_virtualization_plugin_stops_and_closes_before_core_clients(monkey
     assert inventory.cancelled
     assert events == ["collector_task_cancelled", "inventory_closed", "client_closed"]
     assert main_module.app.state.virtualization is None
+
+
+class TestLifespanWanGate:
+    """Live WAN bursts follow the dashboard flag or the MQTT integration."""
+
+    @pytest.mark.parametrize("mqtt_enabled", [False, True])
+    async def test_wan_enabled_follows_dashboard_or_mqtt(
+        self, monkeypatch, mqtt_enabled
+    ):
+        captured = {}
+
+        @asynccontextmanager
+        async def no_plugins(app):
+            yield
+
+        monkeypatch.setattr(main_module, "plugin_lifespan", no_plugins)
+        mqtt = SimpleNamespace(
+            config=SimpleNamespace(enabled=mqtt_enabled),
+            start=lambda: None,
+            close=_noop_async,
+            publish_samples=lambda samples: None,
+            add_extension=lambda *args: None,
+        )
+        monkeypatch.setattr(main_module, "MQTTService", lambda *args: mqtt)
+
+        def make_collector(*args, **kwargs):
+            captured.update(kwargs)
+            return FakeCollector()
+
+        monkeypatch.setattr(main_module, "MetricsCollector", make_collector)
+        monkeypatch.setattr(
+            main_module, "_remove_legacy_exporter_session_file", lambda: None
+        )
+        monkeypatch.setattr(main_module, "shutdown_client", _noop_async)
+        monkeypatch.setattr(main_module.victoria_client, "aclose", _noop_async)
+
+        async with main_module.lifespan(main_module.app):
+            wan_enabled = captured["wan_enabled"]
+            observed = {}
+            for experimental in (False, True):
+                for live in (False, True):
+                    monkeypatch.setattr(
+                        main_module.settings, "experimental_writes", experimental
+                    )
+                    monkeypatch.setattr(main_module.settings, "wan_live_usage", live)
+                    observed[(experimental, live)] = wan_enabled()
+
+        # experimental_writes is irrelevant either way: the burst is verified.
+        assert observed == {
+            (False, False): mqtt_enabled,
+            (False, True): True,
+            (True, False): mqtt_enabled,
+            (True, True): True,
+        }

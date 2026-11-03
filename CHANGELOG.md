@@ -6,6 +6,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [6.8.4](https://github.com/fulviofreitas/eero-ui/compare/v6.8.3...v6.8.4) (2026-11-03)
+
+### 🐛 Bug Fixes
+
+* **test:** wait for palette store fetches to settle before a test ends ([ac23f7f](https://github.com/fulviofreitas/eero-ui/commit/ac23f7f41c79a0b4e648e51c1995899776c903af))
+
+## [6.8.3](https://github.com/fulviofreitas/eero-ui/compare/v6.8.2...v6.8.3) (2026-10-29)
+
+### 🐛 Bug Fixes
+
+* **deps:** bump certifi from 2026.1.4 to 2026.10.18 in /backend ([#467](https://github.com/fulviofreitas/eero-ui/issues/467)) ([b32e5da](https://github.com/fulviofreitas/eero-ui/commit/b32e5da0fd2fd766ef0a83868d1a13fca859f20a))
+
+## [6.8.2](https://github.com/fulviofreitas/eero-ui/compare/v6.8.1...v6.8.2) (2026-10-29)
+
+### 🐛 Bug Fixes
+
+* **deps-dev:** bump black from 26.3.1 to 26.10.1 in /backend ([#471](https://github.com/fulviofreitas/eero-ui/issues/471)) ([fc22491](https://github.com/fulviofreitas/eero-ui/commit/fc22491f00fdffe62a1d642ec52978f67f70edaa))
+
+## [6.8.1](https://github.com/fulviofreitas/eero-ui/compare/v6.8.0...v6.8.1) (2026-10-20)
+
+### 🐛 Bug Fixes
+
+* **deps:** bump aiohttp from 3.14.3 to 3.14.4 in /backend ([#460](https://github.com/fulviofreitas/eero-ui/issues/460)) ([73ba5b9](https://github.com/fulviofreitas/eero-ui/commit/73ba5b989921e7836e9e04ef090804ac05218ddd))
+
+## [6.8.0](https://github.com/fulviofreitas/eero-ui/compare/v6.7.0...v6.8.0) (2026-10-20)
+
+### ✨ Features
+
+* **ui:** rename everything through one shared modal form ([#464](https://github.com/fulviofreitas/eero-ui/issues/464)) ([75e7fb6](https://github.com/fulviofreitas/eero-ui/commit/75e7fb655eb42914940b1240c81190b901c61f55))
+
+## [6.7.0](https://github.com/fulviofreitas/eero-ui/compare/v6.6.0...v6.7.0) (2026-10-20)
+
+### ✨ Features
+
+* **metrics:** WAN throughput gauges no longer need the experimental-writes flag ([#463](https://github.com/fulviofreitas/eero-ui/issues/463)) ([015b7e8](https://github.com/fulviofreitas/eero-ui/commit/015b7e86f5908a321eb5821401fefc177da4f82a)), closes [#458](https://github.com/fulviofreitas/eero-ui/issues/458)
+
+## [6.6.0](https://github.com/fulviofreitas/eero-ui/compare/v6.5.0...v6.6.0) (2026-10-20)
+
+### ✨ Features
+
+* **deps:** require eero-api 8.4.1 ([#461](https://github.com/fulviofreitas/eero-ui/issues/461)) ([0f7ac46](https://github.com/fulviofreitas/eero-ui/commit/0f7ac4627584e5667a40aee3ceeb5702da37d211)), closes [#458](https://github.com/fulviofreitas/eero-ui/issues/458)
+
+## [6.5.0](https://github.com/fulviofreitas/eero-ui/compare/v6.4.0...v6.5.0) (2026-10-19)
+
+### ✨ Features
+
+* **metrics:** live WAN throughput gauges and network card, flag-gated ([#459](https://github.com/fulviofreitas/eero-ui/issues/459)) ([c368808](https://github.com/fulviofreitas/eero-ui/commit/c36880855ecdcdb296b2c8fa8f63a836611fa2fe)), closes [#456](https://github.com/fulviofreitas/eero-ui/issues/456) [#456](https://github.com/fulviofreitas/eero-ui/issues/456) [#458](https://github.com/fulviofreitas/eero-ui/issues/458)
+
+## [6.4.0](https://github.com/fulviofreitas/eero-ui/compare/v6.3.0...v6.4.0) (2026-10-19)
+
+### ✨ Features
+
+* **deps:** update eero-api to 8.4.0 ([#457](https://github.com/fulviofreitas/eero-ui/issues/457)) ([e524b60](https://github.com/fulviofreitas/eero-ui/commit/e524b6072e1d20c69d500b289939559d4935f691))
+
 ## [6.3.0](https://github.com/fulviofreitas/eero-ui/compare/v6.2.0...v6.3.0) (2026-10-13)
 
 ### ✨ Features

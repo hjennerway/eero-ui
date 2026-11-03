@@ -137,9 +137,8 @@ async def lifespan(app: FastAPI):
                 if app.state.mqtt_service
                 else None
             ),
-            wan_enabled=lambda: bool(
-                app.state.mqtt_service and app.state.mqtt_service.config.enabled
-            ),
+            wan_enabled=lambda: settings.wan_live_usage
+            or bool(app.state.mqtt_service and app.state.mqtt_service.config.enabled),
         )
         app.state.metrics_collector = collector
         stack.push_async_callback(
@@ -243,7 +242,7 @@ async def global_exception_handler(request, exc):
 
 
 # ---------------------------------------------------------------------------
-# eero-api exception -> HTTP mapping (phase-6.0-revamp.md § 3.4)
+# eero-api exception -> HTTP mapping (phase-6.0-revamp.md Ã‚Â§ 3.4)
 #
 # Registered by subclass before base so a caller instantiating a subclass
 # always gets the most specific mapping; Starlette's own dispatch walks
@@ -313,7 +312,7 @@ async def experimental_write_disabled_exception_handler(
     request: Request, exc: ExperimentalWriteDisabledError
 ) -> JSONResponse:
     """The write is gated behind ``EERO_DASHBOARD_EXPERIMENTAL_WRITES``
-    (phase-6.0-revamp.md § 5, decision 6a; WP7)."""
+    (phase-6.0-revamp.md Ã‚Â§ 5, decision 6a; WP7)."""
     return JSONResponse(
         status_code=403,
         content={
@@ -511,7 +510,7 @@ if frontend_dist.exists():
     async def serve_spa(full_path: str):
         """Serve the SPA for all non-API routes.
 
-        `/metrics` has no replacement endpoint (see phase-6.0-revamp.md § 2.4)
+        `/metrics` has no replacement endpoint (see phase-6.0-revamp.md Ã‚Â§ 2.4)
         and any `/api/*` path that no router claimed is a genuine 404 --
         neither should ever fall through to index.html.
         """

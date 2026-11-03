@@ -20,9 +20,11 @@
 	import AdvancedSettingsCard from '#lib/components/network/AdvancedSettingsCard.svelte';
 	import NetworkHealthCard from '#lib/components/network/NetworkHealthCard.svelte';
 	import NetworkSpeedTestCard from '#lib/components/network/NetworkSpeedTestCard.svelte';
+	import WanThroughputCard from '#lib/components/network/WanThroughputCard.svelte';
+	import { isBridgeMode } from '#lib/utils/wan-throughput.js';
 	import SpeedTestHistoryCard from '#lib/components/network/SpeedTestHistoryCard.svelte';
 	import NetworkScanCard from '#lib/components/network/NetworkScanCard.svelte';
-	import NetworkRenameModal from '#lib/components/network/NetworkRenameModal.svelte';
+	import RenameModal from '#lib/components/common/RenameModal.svelte';
 	import InsightsCard from '#lib/components/common/InsightsCard.svelte';
 	import DataUsageCard from '#lib/components/network/DataUsageCard.svelte';
 	import EventsCard from '#lib/components/network/EventsCard.svelte';
@@ -50,7 +52,6 @@
 	let speedTestLoading = $state(false);
 	let guestToggleLoading = $state(false);
 	let showRenameModal = $state(false);
-	let renameValue = $state('');
 	let renaming = $state(false);
 	let activeTab = $state('overview');
 	/** Cancelled on unmount (REVIEWER finding, Medium) so an in-flight poll loop stops immediately rather than leaking past navigation. */
@@ -169,7 +170,6 @@
 	}
 
 	function openRenameNetworkModal() {
-		renameValue = network?.name ?? '';
 		showRenameModal = true;
 	}
 
@@ -368,6 +368,17 @@
 				{#if networkId}
 					<!-- Speed Test History is full-width, not a grid cell (maintainer feedback):
 					     its table has enough columns that a half-width card clips the timestamp. -->
+					<!-- Live WAN throughput first, manual test history second. Bridge mode never has the
+					     series, so an "unavailable" chart would mislead; a null mode shows the card. -->
+					<div class="diagnostics-full">
+						{#if isBridgeMode(network?.connection_mode)}
+							<p class="text-muted text-sm wan-bridge-note">
+								WAN throughput is not collected in bridge mode.
+							</p>
+						{:else}
+							<WanThroughputCard {networkId} />
+						{/if}
+					</div>
 					<div class="diagnostics-full"><SpeedTestHistoryCard {networkId} /></div>
 
 					<div class="info-grid diagnostics-secondary">
@@ -396,13 +407,13 @@
 			<TechnicalCard ids={[{ label: 'Network ID', value: networkId }]} />
 		</section>
 
-		<NetworkRenameModal
+		<RenameModal
 			open={showRenameModal}
-			value={renameValue}
+			title="Rename Network"
+			initialValue={network?.name ?? ''}
 			submitting={renaming}
 			onClose={() => (showRenameModal = false)}
 			onSubmit={handleRenameNetwork}
-			onValueChange={(v) => (renameValue = v)}
 		/>
 	{/if}
 </div>

@@ -1,5 +1,5 @@
 /**
- * Handler-coverage guard (plan § 8.2): asserts every request the `api` client
+ * Handler-coverage guard (plan Â§ 8.2): asserts every request the `api` client
  * in `client.ts` can issue is served by a handler in `tests/mocks/handlers.ts`.
  *
  * Approach: call every leaf method on `api` (the same client every store/
@@ -14,7 +14,7 @@
  * The explicit call list below is intentionally exhaustive and mirrors
  * `client.ts`'s public surface 1:1 (deliberate choice over parsing the module
  * with a bundler-level AST walk, which would be brittle and opaque to change
- * - see plan § 8.2 "parse the api object or maintain an explicit list — say
+ * - see plan Â§ 8.2 "parse the api object or maintain an explicit list â€” say
  * which"). Adding a method to `client.ts` without adding it here is caught by
  * `coverage.test.ts`'s companion assertion at the bottom: the call count must
  * match the number of leaf functions found by walking the `api` object.
@@ -309,7 +309,8 @@ describe('api client handler coverage', () => {
 			() => api.account.setPhone('+15551234567'),
 			() => api.account.verifyPhone('123456'),
 			() => api.account.getSmsCountries(),
-			() => api.metrics.roaming('network-123')
+			() => api.metrics.roaming('network-123'),
+			() => api.metrics.wanThroughput('network-123')
 		];
 
 		// Every call is allowed to reject (e.g. a fixture returns a shape a
@@ -327,6 +328,6 @@ describe('api client handler coverage', () => {
 		// Guards the guard: if client.ts grows a new method, this fails until
 		// the call list above is updated too, instead of silently covering
 		// only a subset forever.
-		expect(countLeafMethods(api)).toBe(144);
+		expect(countLeafMethods(api)).toBe(145);
 	});
 });
