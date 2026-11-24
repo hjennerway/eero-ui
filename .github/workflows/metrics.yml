@@ -21,13 +21,36 @@ permissions: {}
 
 jobs:
   metrics:
-    # The callee commits the SVG with the App token; GITHUB_TOKEN only needs to read.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Repository metrics need no separate GitHub App installation or secrets.
     permissions:
-      contents: read
-    uses: fulviofreitas/workflow-arsenal/.github/workflows/reusable-metrics.yml@7fcefdc57681a54229f0ae2c846f13d47e436e19 # v1.0.0
-    with:
-      repo: eero-ui
-      branch: master
-    secrets:
-      RENOVATE_APP_ID: ${{ secrets.RENOVATE_APP_ID }}
-      RENOVATE_APP_PRIVATE_KEY: ${{ secrets.RENOVATE_APP_PRIVATE_KEY }}
+      contents: write
+      issues: read
+      pull-requests: read
+    steps:
+      - name: Generate Repository Metrics
+        uses: lowlighter/metrics@65836723097537a54cd8eb90f61839426b4266b6 # v3.34
+        with:
+          template: repository
+          repo: ${{ github.event.repository.name }}
+          user: ${{ github.repository_owner }}
+          filename: metrics.repository.svg
+          token: ${{ github.token }}
+          committer_token: ${{ github.token }}
+          committer_message: "chore: update repository metrics [skip ci]"
+          committer_branch: master
+          base: header, activity, community, repositories, metadata
+          plugin_languages: true
+          plugin_languages_colors: github
+          plugin_languages_limit: 8
+          plugin_languages_sections: most-used
+          plugin_languages_details: percentage
+          plugin_stargazers: true
+          plugin_stargazers_charts_type: classic
+          plugin_followup: true
+          plugin_followup_sections: repositories
+          config_timezone: UTC
+          config_output: svg
+          retries: 3
+          retries_delay: 300
