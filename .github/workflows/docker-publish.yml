@@ -6,8 +6,7 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: ghcr-${{ github.ref }}
@@ -16,6 +15,8 @@ concurrency:
 jobs:
   test:
     name: Test application
+    permissions:
+      contents: read
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

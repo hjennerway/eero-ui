@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { SvelteFlow, Controls, Background, type Node, type NodeTypes } from '@xyflow/svelte';
-	import '@xyflow/svelte/dist/style.css';
+	import '@xyflow/svelte/style.css';
 	import type { VirtualizationNode } from './types';
 	import ProxmoxNode from './ProxmoxNode.svelte';
 	import { theme } from '#lib/stores/ui.js';
@@ -26,7 +26,7 @@
 		edges={[]}
 		{nodeTypes}
 		fitView
-		colorMode={$theme}
+		forceColorMode={$theme}
 		minZoom={0.15}
 		maxZoom={1.5}
 		nodesConnectable={false}
@@ -41,6 +41,15 @@
 </div>
 
 <style>
+	/* Restore panel spacing above xyflow's CSS layer and the app-wide reset. */
+	.virtualization-map :global(.svelte-flow__panel) {
+		margin: 15px;
+	}
+
+	.virtualization-map :global(.svelte-flow__controls-button) {
+		padding: 4px;
+	}
+
 	.virtualization-map {
 		height: min(70vh, 900px);
 		min-height: 500px;

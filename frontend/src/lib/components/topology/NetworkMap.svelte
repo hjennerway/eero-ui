@@ -15,7 +15,7 @@
 		type NodeTypes,
 		type EdgeTypes
 	} from '@xyflow/svelte';
-	import '@xyflow/svelte/dist/style.css';
+	import '@xyflow/svelte/style.css';
 
 	import { goto } from '$app/navigation';
 	import {
@@ -60,6 +60,10 @@
 		{ value: 'standard', label: 'Standard (+Model, Metrics)' },
 		{ value: 'detailed', label: 'Detailed (All Info)' }
 	];
+
+	// xyflow 2.x reads numeric padding as pixels. 5.4% matches the framing of the pre-2.0
+	// fractional `padding: 0.12` (legacy p maps to p / (2 + 2p) of the viewport per side).
+	const FIT_VIEW_PADDING = '5.4%';
 
 	// Custom node types registration
 	const nodeTypes: NodeTypes = {
@@ -234,7 +238,7 @@
 					{nodeTypes}
 					{edgeTypes}
 					fitView
-					fitViewOptions={{ padding: 0.12 }}
+					fitViewOptions={{ padding: FIT_VIEW_PADDING }}
 					minZoom={0.05}
 					maxZoom={2}
 					nodesDraggable={!readonly}
@@ -545,6 +549,17 @@
 	/* Override Svelte Flow default styles to follow the active theme */
 	:global(.svelte-flow) {
 		background: var(--color-bg-primary) !important;
+	}
+
+	/* xyflow 2.x ships its CSS in `@layer xyflow`, so the unlayered global reset in app.css
+	   (`* { margin: 0; padding: 0 }`) now beats xyflow's own panel margin and button padding.
+	   Restore the values xyflow intends. */
+	:global(.svelte-flow__panel) {
+		margin: 15px;
+	}
+
+	:global(.svelte-flow__controls-button) {
+		padding: 4px;
 	}
 
 	:global(.svelte-flow__attribution) {
