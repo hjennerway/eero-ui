@@ -40,6 +40,10 @@ Conventions that apply to every route below:
 | Method | Endpoint | Response | Notes |
 |---|---|---|---|
 | `GET` | `/api/switches` | `list[SwitchSnapshot]` | Authenticated; optional `?network_id=`, defaults to preferred network. Empty list when not configured. Cached for 30 seconds. |
+| `GET` | `/api/switches/settings` | `SwitchSettings` | Loads switch settings and an edit revision for the selected network. |
+| `PUT` | `/api/switches/settings` | `SwitchSettings` | Saves the switch list for the selected network. Submit `revision` and `switches` from the editor. A stale revision returns `409`. |
+
+Both settings endpoints accept `?network_id=` and default to the preferred network. Supply `community` for each new managed switch or changed SNMP address or port. Omit it to retain the saved community.
 
 Each snapshot contains `id`, `name`, `host`, `status` (`online`, `unreachable` or `unknown`), `kind` (`managed` or `unmanaged`), `model`, `mac`, `observed_at`, `warnings` and `ports`. Ports expose their interface ID, name, kind (`physical` or `lag`), status, speed in Mbps, learned MACs and LLDP neighbours. Configuration credentials are never returned. An unreachable switch has no port data; it does not fail other switches or the eero topology. User-configured unmanaged snapshots have status `unknown`, empty host/ports and no observation time, with `upstream_switch_id`, `upstream_port_id`, `eero_ids` and `known_devices` (`mac`, `ip`, `name`) describing supplied wiring. Invalid or unreadable configuration returns a sanitized `503`. See [[Configuration#network-switches]].
 

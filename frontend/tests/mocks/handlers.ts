@@ -242,6 +242,12 @@ export const handlers = [
 	),
 	http.get('/api/nas', () => HttpResponse.json([])),
 	http.get('/api/switches', () => HttpResponse.json([])),
+	http.get('/api/switches/settings', () =>
+		HttpResponse.json({ network_id: 'network-123', revision: '0'.repeat(64), switches: [] })
+	),
+	http.put('/api/switches/settings', () =>
+		HttpResponse.json({ network_id: 'network-123', revision: '1'.repeat(64), switches: [] })
+	),
 	http.get('/api/discovery', () =>
 		HttpResponse.json({
 			status: 'disabled',

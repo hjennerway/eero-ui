@@ -214,7 +214,7 @@ async def request_validation_error_handler(
     request: Request, exc: RequestValidationError
 ):
     if (
-        request.url.path == "/api/mqtt"
+        request.url.path in {"/api/mqtt", "/api/switches/settings"}
         or request.scope.get("endpoint") in app.state.plugin_endpoints
     ):
         # FastAPI normally echoes invalid inputs, which can contain secrets.

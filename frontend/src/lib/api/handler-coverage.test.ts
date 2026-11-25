@@ -44,6 +44,8 @@ describe('api client handler coverage', () => {
 		const calls: Array<() => Promise<unknown>> = [
 			() => api.discovery.get(),
 			() => api.switches.list(),
+			() => api.switches.getSettings(),
+			() => api.switches.saveSettings('network-123', { revision: '0'.repeat(64), switches: [] }),
 			() => api.mqtt.get(),
 			() =>
 				api.mqtt.update({
@@ -328,6 +330,6 @@ describe('api client handler coverage', () => {
 		// Guards the guard: if client.ts grows a new method, this fails until
 		// the call list above is updated too, instead of silently covering
 		// only a subset forever.
-		expect(countLeafMethods(api)).toBe(145);
+		expect(countLeafMethods(api)).toBe(147);
 	});
 });

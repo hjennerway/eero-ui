@@ -5,6 +5,7 @@
 -->
 <script lang="ts">
 	import NetworkMap from '#lib/components/topology/NetworkMap.svelte';
+	import SwitchSettings from '#lib/components/topology/SwitchSettings.svelte';
 </script>
 
 <svelte:head>
@@ -17,6 +18,7 @@
 			<h1>Network Topology</h1>
 			<p class="text-muted">Visual map of your eeros, switches and connected devices</p>
 		</div>
+		<SwitchSettings />
 	</header>
 
 	<div class="topology-wrapper">

@@ -475,6 +475,39 @@ export interface SwitchPort {
 	neighbors: { chassis_mac: string | null; name: string | null; port: string | null }[];
 }
 
+export interface KnownSwitchDevice {
+	mac: string;
+	ip: string;
+	name: string;
+}
+
+export interface UnmanagedSwitchConfig {
+	id: string;
+	name: string;
+	port: number;
+	eero_ids: string[];
+	devices: KnownSwitchDevice[];
+}
+
+export interface ManagedSwitchConfig {
+	id: string;
+	name: string;
+	host: string;
+	port: number;
+	unmanaged_switches: UnmanagedSwitchConfig[];
+}
+
+export interface SwitchSettings {
+	network_id: string;
+	revision: string;
+	switches: ManagedSwitchConfig[];
+}
+
+export interface SwitchSettingsUpdate {
+	revision: string;
+	switches: (ManagedSwitchConfig & { community: string | null })[];
+}
+
 export interface SwitchSnapshot {
 	id: string;
 	name: string;
@@ -489,7 +522,7 @@ export interface SwitchSnapshot {
 	upstream_switch_id?: string | null;
 	upstream_port_id?: number | null;
 	eero_ids?: string[];
-	known_devices?: { mac: string; ip: string; name: string }[];
+	known_devices?: KnownSwitchDevice[];
 }
 
 export interface DiscoveredDevice {

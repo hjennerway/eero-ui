@@ -233,3 +233,115 @@ async def test_rejects_conflicting_known_wiring(tmp_path, monkeypatch):
         SwitchConfig(
             **(config() | {"unmanaged_switches": [known, known | {"id": "other"}]})
         )
+
+
+async def test_settings_override_legacy_per_network(auth_client, tmp_path, monkeypatch):
+    path = tmp_path / "legacy-switches.json"
+    legacy = json.dumps(
+        [config(), config() | {"id": "other", "network_id": "network-456"}]
+    )
+    path.write_text(legacy, encoding="utf-8")
+    monkeypatch.setattr(settings, "switches_file", str(path))
+
+    async def snapshot(switch):
+        assert switch.community.get_secret_value() == "test-secret"
+        return SwitchSnapshot(
+            id=switch.id, name=switch.name, host=str(switch.host), status="online"
+        )
+
+    poll = AsyncMock(side_effect=snapshot)
+    monkeypatch.setattr(switches, "poll_switch", poll)
+
+    endpoint = "/api/switches/settings"
+    headers = {"X-Requested-With": "eero-ui"}
+    original = await auth_client.get(endpoint)
+    assert original.status_code == 200
+    assert "community" not in original.text and "test-secret" not in original.text
+    config_view = original.json()
+    assert config_view["network_id"] == "network-123"
+    assert [s["id"] for s in config_view["switches"]] == ["office"]
+    poll.assert_not_awaited()
+
+    config_view["switches"][0]["name"] = "Updated switch"
+    config_view["switches"][0]["unmanaged_switches"] = [
+        {
+            "id": "desk",
+            "name": "Desk switch",
+            "port": 108,
+            "eero_ids": ["eero-2"],
+            "devices": [
+                {"mac": "02:00:00:00:00:01", "ip": "192.168.1.20", "name": "NAS"}
+            ],
+        }
+    ]
+    response = await auth_client.put(endpoint, json=config_view, headers=headers)
+    assert response.status_code == 200, response.text
+    assert "community" not in response.text and "test-secret" not in response.text
+    assert response.json()["revision"] != config_view["revision"]
+    assert path.read_text(encoding="utf-8") == legacy
+
+    topology = await auth_client.get("/api/switches")
+    assert topology.status_code == 200
+    assert [s["name"] for s in topology.json()] == ["Updated switch", "Desk switch"]
+    assert topology.json()[1]["upstream_port_id"] == 108
+    assert topology.json()[1]["known_devices"][0]["name"] == "NAS"
+    assert poll.await_count == 1
+
+    other = await auth_client.get(endpoint, params={"network_id": "network-456"})
+    assert [s["id"] for s in other.json()["switches"]] == ["other"]
+    removed = await auth_client.put(
+        endpoint,
+        json={"revision": response.json()["revision"], "switches": []},
+        headers=headers,
+    )
+    assert removed.status_code == 200
+    assert (await auth_client.get("/api/switches")).json() == []
+
+
+async def test_settings_validate_credentials_and_reject_stale_edits(
+    auth_client, monkeypatch
+):
+    monkeypatch.setattr(settings, "switches_file", None)
+    endpoint = "/api/switches/settings"
+    headers = {"X-Requested-With": "eero-ui"}
+    initial = (await auth_client.get(endpoint)).json()
+    switch = {key: value for key, value in config().items() if key != "network_id"}
+    payload = {"revision": initial["revision"], "switches": [switch]}
+
+    del auth_client.headers["X-Requested-With"]
+    assert (await auth_client.put(endpoint, json=payload)).status_code == 403
+
+    invalid = {
+        "revision": initial["revision"],
+        "switches": [switch | {"host": "127.0.0.1"}],
+    }
+    rejected = await auth_client.put(endpoint, json=invalid, headers=headers)
+    assert rejected.status_code == 422
+    invalid["switches"] = [switch | {"community": {"value": "test-secret"}}]
+    rejected = await auth_client.put(endpoint, json=invalid, headers=headers)
+    assert rejected.status_code == 422
+    assert "test-secret" not in rejected.text
+    assert (await auth_client.get(endpoint)).json() == initial
+
+    saved = await auth_client.put(endpoint, json=payload, headers=headers)
+    assert saved.status_code == 200, saved.text
+    changed_address = saved.json()
+    changed_address["switches"][0]["host"] = "192.168.1.11"
+    rejected = await auth_client.put(endpoint, json=changed_address, headers=headers)
+    assert rejected.status_code == 422
+    assert "SNMP community" in rejected.text
+
+    stale = await auth_client.put(endpoint, json=payload, headers=headers)
+    assert stale.status_code == 409
+    assert (await auth_client.get(endpoint)).json() == saved.json()
+
+
+async def test_switch_settings_require_auth(async_client):
+    endpoint = "/api/switches/settings"
+    assert (await async_client.get(endpoint)).status_code == 401
+    response = await async_client.put(
+        endpoint,
+        json={"revision": "0" * 64, "switches": []},
+        headers={"X-Requested-With": "eero-ui"},
+    )
+    assert response.status_code == 401

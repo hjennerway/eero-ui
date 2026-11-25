@@ -13,7 +13,7 @@ All settings are read once at startup from the environment (`backend/app/config.
 | `EERO_DASHBOARD_COOKIE_FILE` | Path of the eero credential file, owned by the `eero-api` SDK | `/data/session/session.json` (Docker) / `~/.eero-dashboard/session.json` (local) |
 | `EERO_DASHBOARD_VICTORIA_METRICS_URL` | VictoriaMetrics base URL. Used for **both** the collector's writes and the chart reads | `http://127.0.0.1:8428` |
 | `EERO_DASHBOARD_COLLECTION_INTERVAL` | Seconds between metrics collection cycles. Clamped to a minimum of `10` | `60` |
-| `EERO_DASHBOARD_SWITCHES_FILE` | Path to a private JSON file defining read-only SNMP switches for topology | unset (disabled) |
+| `EERO_DASHBOARD_SWITCHES_FILE` | Optional path to a private JSON file defining topology switches | unset |
 | `EERO_DASHBOARD_NAS_FILE` | Path to a private JSON file defining QNAP NAS devices for disk health and storage usage | unset (disabled) |
 | `EERO_DASHBOARD_DISCOVERY_FILE` | Path to the hourly LAN scanner's JSON snapshot | unset (disabled) |
 | `EERO_DASHBOARD_METRICS_RETENTION` | How long the embedded VictoriaMetrics keeps data (`30d`, `6m`, `1y`). Shell-only: read by `container-start.sh`, not by Python | `1y` |
@@ -77,6 +77,10 @@ Metrics are collected by eero-ui's **own collector** (a task inside the FastAPI 
 - **External store** — because `EERO_DASHBOARD_VICTORIA_METRICS_URL` serves both the write and the read path, pointing it at an external VictoriaMetrics makes the embedded one idle. It still starts inside the container; that is harmless.
 
 ## Network switches
+
+Open **Topology → Switch settings** to add, edit, or remove switches for the selected eero network. Enter the managed switch's private IPv4 address and read-only SNMP v2c community. Add unmanaged switches under their upstream managed switch by interface ID (ifIndex). You can select the connected eeros and enter known wired clients with their name, IPv4 address, and MAC address.
+
+The editor loads existing entries from the optional JSON file below. Saving puts that network's configuration in `topology-switch-settings.json` next to `session.json`. After the first save for a network, Topology uses its saved settings. Other networks continue to load their existing file entries until saved in the editor.
 
 Topology can include managed switches using read-only **SNMP v2c**. The Netgear GS110TP has been verified with firmware 5.4.2.36. The collector uses standard IF-MIB, BRIDGE-MIB, Q-BRIDGE-MIB and LLDP-MIB tables; other models need to expose those tables. No switch settings are changed.
 

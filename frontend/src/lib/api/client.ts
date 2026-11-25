@@ -281,7 +281,15 @@ export const api = {
 		get: () => fetchWithHandling<import('./types').DiscoveryResponse>('/discovery', { retries: 0 })
 	},
 	switches: {
-		list: () => fetchWithHandling<import('./types').SwitchSnapshot[]>('/switches', { retries: 0 })
+		list: () => fetchWithHandling<import('./types').SwitchSnapshot[]>('/switches', { retries: 0 }),
+		getSettings: () =>
+			fetchWithHandling<import('./types').SwitchSettings>('/switches/settings', { retries: 0 }),
+		saveSettings: (networkId: string, body: import('./types').SwitchSettingsUpdate) =>
+			fetchWithHandling<import('./types').SwitchSettings>('/switches/settings', {
+				method: 'PUT',
+				params: { network_id: networkId },
+				body
+			})
 	},
 	// Health
 	health: () => fetchWithHandling<import('./types').HealthStatus>('/health'),
